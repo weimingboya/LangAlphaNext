@@ -1,0 +1,1 @@
+"""LangAlpha domain capabilities."""

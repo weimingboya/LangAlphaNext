@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LangAlpha</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script type="module" src="/static/app.js"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="thread-rail">
+        <h1>LangAlpha</h1>
+        <button class="primary new-thread" type="button" id="new-thread">
+          <span aria-hidden="true">＋</span> New research
+        </button>
+        <h2>Research threads</h2>
+        <nav id="thread-list" aria-label="Research threads"></nav>
+      </aside>
+
+      <section class="research-pane" aria-label="Research conversation">
+        <div class="transcript" id="transcript">
+          <div class="empty-state">
+            <h2>Start a research thread</h2>
+            <p>Ask a question or attach a file. The workspace remains empty until you do.</p>
+          </div>
+        </div>
+        <form class="composer" id="composer">
+          <label class="attach" title="Attach file">
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <path d="M8 12.5 14.7 5.8a3 3 0 0 1 4.3 4.3l-8.5 8.5a5 5 0 0 1-7.1-7.1l8-8" />
+            </svg>
+            <span class="sr-only">Attach file</span>
+            <input type="file" id="file-input" />
+          </label>
+          <textarea
+            id="message"
+            rows="1"
+            placeholder="Ask a research question…"
+            aria-label="Research question"
+            required
+          ></textarea>
+          <button class="primary" type="submit" id="send">Send</button>
+        </form>
+      </section>
+
+      <aside class="evidence-rail">
+        <section>
+          <h2>Evidence</h2>
+          <div class="rail-list" id="evidence-list">
+            <p class="muted">Tool and data events will appear here.</p>
+          </div>
+        </section>
+        <section>
+          <h2>Workspace files</h2>
+          <div class="rail-list" id="file-list">
+            <p class="muted">No files yet.</p>
+          </div>
+        </section>
+        <section>
+          <h2>Run status</h2>
+          <div class="status-row" id="run-status">
+            <span class="status-mark" aria-hidden="true"></span>
+            <span>Ready</span>
+          </div>
+          <div class="run-actions">
+            <textarea
+              id="guidance-input"
+              rows="3"
+              placeholder="Add guidance to the active run…"
+              aria-label="Run guidance"
+            ></textarea>
+            <button class="secondary" type="button" id="send-guidance">Guide run</button>
+            <button class="danger-link" type="button" id="cancel-run">Cancel run</button>
+          </div>
+        </section>
+      </aside>
+    </main>
+  </body>
+</html>
