@@ -122,14 +122,13 @@ def _tool_message_records(
         messages = state.get("messages", [])
     else:
         messages = getattr(state, "messages", [])
+    fallback_candidates: list[list[dict[str, Any]]] = []
     for message in reversed(messages):
         message_call_id = (
             message.get("tool_call_id")
             if isinstance(message, dict)
             else getattr(message, "tool_call_id", None)
         )
-        if message_call_id != tool_call_id:
-            continue
         content = (
             message.get("content")
             if isinstance(message, dict)
@@ -143,12 +142,30 @@ def _tool_message_records(
             ]
             content = "".join(text_blocks)
         if not isinstance(content, str):
-            raise ValueError("source ToolMessage does not contain JSON text")
-        parsed = json.loads(content)
+            if message_call_id == tool_call_id:
+                raise ValueError("source ToolMessage does not contain JSON text")
+            continue
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            if message_call_id == tool_call_id:
+                raise ValueError("source ToolMessage does not contain valid JSON") from None
+            continue
         candidate = parsed.get("records") if isinstance(parsed, dict) else parsed
         if not isinstance(candidate, list) or not all(isinstance(row, dict) for row in candidate):
-            raise ValueError("source ToolMessage JSON has no records array")
-        return candidate
+            if message_call_id == tool_call_id:
+                raise ValueError("source ToolMessage JSON has no records array")
+            continue
+        if message_call_id == tool_call_id:
+            return candidate
+        fallback_candidates.append(candidate)
+    if len(fallback_candidates) == 1:
+        return fallback_candidates[0]
+    if len(fallback_candidates) > 1:
+        raise ValueError(
+            f"source ToolMessage not found: {tool_call_id}; "
+            "multiple record-producing ToolMessages make fallback ambiguous"
+        )
     raise ValueError(f"source ToolMessage not found: {tool_call_id}")
 
 

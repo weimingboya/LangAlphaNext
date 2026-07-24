@@ -18,6 +18,87 @@ function finiteNumber(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function messageKind(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  const raw = String(value.role || value.type || "").toLowerCase();
+  if (raw === "assistant" || raw === "ai" || raw.includes("aimessage")) {
+    return "assistant";
+  }
+  if (raw === "user" || raw === "human" || raw.includes("humanmessage")) {
+    return "user";
+  }
+  if (raw === "tool" || raw.includes("toolmessage")) return "tool";
+  return "";
+}
+
+function visibleText(value) {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(visibleText).join("");
+  if (!value || typeof value !== "object") return "";
+  const kind = String(value.type || "").toLowerCase();
+  if (["text", "output_text"].includes(kind)) {
+    return visibleText(value.text ?? value.content ?? "");
+  }
+  if (
+    kind.includes("tool") ||
+    kind.includes("reasoning") ||
+    kind.includes("function")
+  ) {
+    return "";
+  }
+  return visibleText(value.content ?? value.text ?? "");
+}
+
+export function assistantMessageText(value) {
+  if (Array.isArray(value)) {
+    const messages = value.filter((item) => messageKind(item));
+    if (messages.length) {
+      const latestAssistant = messages.findLast(
+        (item) => messageKind(item) === "assistant" && visibleText(item.content).trim(),
+      );
+      return latestAssistant ? assistantMessageText(latestAssistant) : "";
+    }
+    return visibleText(value);
+  }
+  if (!value || typeof value !== "object") return "";
+
+  const kind = messageKind(value);
+  if (kind === "tool" || kind === "user") return "";
+  if (kind === "assistant") return visibleText(value.content ?? "");
+
+  if ("value" in value) return assistantMessageText(value.value);
+  if ("message" in value) return assistantMessageText(value.message);
+  if ("messages" in value) return assistantMessageText(value.messages);
+  return visibleText(value);
+}
+
+function compactNumber(value) {
+  if (!Number.isFinite(value)) return null;
+  return new Intl.NumberFormat("en", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+export function formatUsageSummary(payload) {
+  const input = finiteNumber(payload?.input_tokens);
+  const output = finiteNumber(payload?.output_tokens);
+  const cached = finiteNumber(payload?.cached_input_tokens);
+  const total = finiteNumber(payload?.total_tokens);
+  const cost = finiteNumber(payload?.estimated_cost_usd);
+  const parts = [];
+
+  if (input !== null) {
+    const cachedLabel =
+      cached !== null && cached > 0 ? ` (${compactNumber(cached)} cached)` : "";
+    parts.push(`${compactNumber(input)} input${cachedLabel}`);
+  }
+  if (output !== null) parts.push(`${compactNumber(output)} output`);
+  if (!parts.length && total !== null) parts.push(`${compactNumber(total)} total`);
+  if (cost !== null) parts.push(`$${cost.toFixed(4)}`);
+  return parts.length ? `Usage: ${parts.join(" · ")}` : "Usage unavailable";
+}
+
 export function buildChartModel(widget) {
   if (!widget || typeof widget !== "object" || Array.isArray(widget)) {
     throw new TypeError("Chart widget must be an object");

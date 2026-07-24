@@ -71,9 +71,9 @@ class Settings(BaseSettings):
         alias="MCP_MAX_CALLS_PER_RUN",
     )
 
-    max_model_calls: int = 40
-    max_tool_calls: int = 150
-    max_run_seconds: int = 1_200
+    max_model_calls: int = 20
+    max_tool_calls: int = 80
+    max_run_seconds: int = 600
     max_async_subagents: int = 3
     max_upload_bytes: int = 25 * 1024 * 1024
 

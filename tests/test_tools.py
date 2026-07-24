@@ -111,6 +111,68 @@ def test_dataset_materializer_reads_prior_tool_message_without_record_copy(
     assert files[result["path"]].count("\n") == 2
 
 
+def test_dataset_materializer_falls_back_to_unique_record_tool_message(
+    monkeypatch,
+) -> None:
+    files: dict[str, str] = {}
+
+    class Backend:
+        def execute(self, _: str):
+            return SimpleNamespace(exit_code=0, output="")
+
+        def write(self, path: str, content: str):
+            files[path] = content
+            return SimpleNamespace(error=None)
+
+    monkeypatch.setattr(module, "get_context_daytona_backend", lambda: Backend())
+    runtime = _runtime()
+    runtime.state["messages"] = [
+        SimpleNamespace(tool_call_id="other", content="not JSON"),
+        SimpleNamespace(
+            tool_call_id="actual-market-call",
+            content=json.dumps({"records": [{"symbol": "AAPL", "price": 200.0}]}),
+        ),
+    ]
+
+    result = json.loads(
+        module.materialize_dataset.func(
+            logical_operation_id="market-call",
+            name="quotes",
+            source="get_market_quotes",
+            source_tool_call_id="model-supplied-invalid-id",
+            runtime=runtime,
+            file_format="jsonl",
+        )
+    )
+
+    assert result["row_count"] == 1
+    assert files[result["path"]].count("\n") == 1
+
+
+def test_dataset_materializer_rejects_ambiguous_record_fallback() -> None:
+    runtime = _runtime()
+    runtime.state["messages"] = [
+        SimpleNamespace(
+            tool_call_id="first",
+            content=json.dumps({"records": [{"symbol": "AAPL"}]}),
+        ),
+        SimpleNamespace(
+            tool_call_id="second",
+            content=json.dumps({"records": [{"symbol": "MSFT"}]}),
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="fallback ambiguous"):
+        module.materialize_dataset.func(
+            logical_operation_id="market-call",
+            name="quotes",
+            source="get_market_quotes",
+            source_tool_call_id="model-supplied-invalid-id",
+            runtime=runtime,
+            file_format="jsonl",
+        )
+
+
 def test_inspect_asset_returns_bounded_metadata(monkeypatch) -> None:
     content = b"symbol,price\nAAPL,200\n"
 

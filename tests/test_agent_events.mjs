@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  assistantMessageText,
   buildChartModel,
+  formatUsageSummary,
   initialAgentProjection,
   parseAgentEvent,
   reduceAgentEvent,
@@ -66,4 +68,59 @@ test("chart model remains bounded and numeric", () => {
   assert.deepEqual(model.series[0].values, [10, 12.5]);
   assert.equal(model.minimum, 0);
   assert.equal(model.maximum, 12.5);
+});
+
+test("assistant message projection hides tool payloads and empty tool calls", () => {
+  assert.equal(
+    assistantMessageText({
+      value: [
+        {
+          type: "tool",
+          name: "show_widget",
+          content: '{"title":"raw tool result"}',
+        },
+      ],
+    }),
+    "",
+  );
+  assert.equal(
+    assistantMessageText({
+      value: [{ type: "ai", content: "", tool_calls: [{ name: "read_file" }] }],
+    }),
+    "",
+  );
+  assert.equal(
+    assistantMessageText({
+      value: [
+        {
+          type: "ai",
+          content: [{ type: "text", text: "The report is ready." }],
+        },
+      ],
+    }),
+    "The report is ready.",
+  );
+  assert.equal(
+    assistantMessageText({
+      value: [
+        { type: "ai", content: "The" },
+        { type: "ai", content: "The report" },
+        { type: "ai", content: "The report is ready." },
+      ],
+    }),
+    "The report is ready.",
+  );
+});
+
+test("usage summary distinguishes cached input from output", () => {
+  assert.equal(
+    formatUsageSummary({
+      input_tokens: 170334,
+      output_tokens: 1965,
+      total_tokens: 172299,
+      cached_input_tokens: 156432,
+      estimated_cost_usd: null,
+    }),
+    "Usage: 170.3K input (156.4K cached) · 2K output",
+  );
 });

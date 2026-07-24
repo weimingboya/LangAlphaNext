@@ -1,5 +1,7 @@
 import {
+  assistantMessageText,
   buildChartModel,
+  formatUsageSummary,
   initialAgentProjection,
   reduceAgentEvent,
 } from "/static/agent-events.mjs";
@@ -10,6 +12,7 @@ const state = {
   activeRunId: null,
   events: [],
   stream: null,
+  snapshotRequestId: 0,
   projection: initialAgentProjection(),
 };
 
@@ -47,25 +50,10 @@ function renderThreads() {
   }
 }
 
-function contentText(value) {
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => {
-        if (typeof item === "string") return item;
-        if (item?.type === "text") return item.text || "";
-        return contentText(item?.content ?? item?.text ?? "");
-      })
-      .join("");
-  }
-  if (!value || typeof value !== "object") return "";
-  return contentText(value.content ?? value.value ?? value.text ?? "");
-}
-
 function eventText(event) {
   const payload = event.payload || {};
   if (["message.delta", "message.completed"].includes(event.type)) {
-    return contentText(payload);
+    return assistantMessageText(payload);
   }
   if (event.type === "run.error") return payload.message || payload.error || "Run failed";
   if (event.type === "todo.updated") return "Research plan updated";
@@ -75,32 +63,29 @@ function eventText(event) {
     return `Widget ready: ${payload.widget?.title || payload.title || "result"}`;
   }
   if (event.type === "usage.updated") {
-    const tokens = payload.total_tokens ?? "unknown";
-    const cost = payload.estimated_cost_usd;
-    return cost == null
-      ? `Usage: ${tokens} tokens`
-      : `Usage: ${tokens} tokens · $${Number(cost).toFixed(4)}`;
+    return formatUsageSummary(payload);
   }
   return event.type.replaceAll(".", " ");
 }
 
 function messageProjection() {
   const projected = [];
-  const completedRuns = new Set(
-    state.events
-      .filter((event) => event.type === "message.completed")
-      .map((event) => event.run_id),
-  );
   const deltas = new Map();
 
   for (const event of state.events) {
     if (event.type === "user.message") {
       projected.push({ ...event, author: "You", text: event.payload.content });
     } else if (event.type === "message.completed") {
-      projected.push({ ...event, author: "LangAlpha", text: eventText(event) });
-    } else if (event.type === "message.delta" && !completedRuns.has(event.run_id)) {
+      const text = eventText(event);
+      if (text.trim()) {
+        deltas.delete(event.run_id);
+        projected.push({ ...event, author: "LangAlpha", text });
+      }
+    } else if (event.type === "message.delta") {
+      const text = eventText(event);
+      if (!text) continue;
       const current = deltas.get(event.run_id) || { ...event, author: "LangAlpha", text: "" };
-      current.text += eventText(event);
+      current.text = text;
       deltas.set(event.run_id, current);
     } else if (event.type === "run.error") {
       projected.push({ ...event, author: "LangAlpha", text: eventText(event) });
@@ -558,8 +543,14 @@ function snapshotEvent(threadId, runId, type, payload, id) {
   };
 }
 
-async function loadSnapshot(threadId) {
+async function loadSnapshot(threadId, requestId) {
   const snapshot = await api(`/api/threads/${threadId}/snapshot`);
+  if (
+    requestId !== state.snapshotRequestId ||
+    state.activeThread?.id !== threadId
+  ) {
+    return;
+  }
   state.projection = initialAgentProjection();
   state.events = [];
   const fallbackRunId = snapshot.runs[0]?.id || `snapshot:${threadId}`;
@@ -667,6 +658,8 @@ async function loadSnapshot(threadId) {
 }
 
 async function selectThread(thread) {
+  const requestId = state.snapshotRequestId + 1;
+  state.snapshotRequestId = requestId;
   state.activeThread = thread;
   state.activeRunId = null;
   state.stream?.close();
@@ -674,7 +667,7 @@ async function selectThread(thread) {
   fileList.innerHTML = '<p class="muted">No files yet.</p>';
   setStatus("Ready", "idle");
   renderThreads();
-  await loadSnapshot(thread.id);
+  await loadSnapshot(thread.id, requestId);
 }
 
 async function createThread() {
