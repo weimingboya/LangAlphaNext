@@ -9,7 +9,6 @@ def test_empty_optional_secret_and_price_environment_values_are_ignored(
     monkeypatch.setenv("DAYTONA_API_KEY", "")
     monkeypatch.setenv("OPENAI_API_KEY", "")
     monkeypatch.setenv("LANGSMITH_API_KEY", "")
-    monkeypatch.setenv("REDIS_URL", "")
     monkeypatch.setenv("OPENAI_INPUT_COST_PER_MILLION", "")
     monkeypatch.setenv("OPENAI_OUTPUT_COST_PER_MILLION", "")
 
@@ -17,7 +16,5 @@ def test_empty_optional_secret_and_price_environment_values_are_ignored(
     assert settings.openai_api_key is None
     assert settings.daytona_api_key is None
     assert settings.langsmith_api_key is None
-    assert settings.redis_url is None
     assert settings.openai_input_cost_per_million is None
     assert settings.openai_output_cost_per_million is None
-    assert settings.cost_warning_usd == 1

@@ -10,7 +10,7 @@ The implementation uses:
 - OpenAI `gpt-5.6-luna` through the Responses API;
 - Daytona as the only Python, shell, and workspace sandbox;
 - host-side MCP tools through `langchain-mcp-adapters`;
-- a thin FastAPI control plane with durable, replayable DomainEvents;
+- a thin FastAPI BFF that proxies Agent Server resources and streams;
 - a responsive local research UI served by the control plane.
 
 ## Local development
@@ -60,17 +60,14 @@ Python. Prefer `source_tool_call_id` so large Tool results are read from the
 existing ToolMessage rather than copied through another model call. Python does
 not call MCP directly. User-visible outputs belong under `/workspace/artifacts`.
 
-The product UI supports durable run progress, replay, artifacts, HITL
+The product UI supports resumable run progress, snapshot recovery, artifacts, HITL
 Ask/Plan cards, guidance, cancellation, structured data widgets, native SVG
 bar/line charts, and token usage. Cost is shown only when explicit input/output
-rates are configured. The default cumulative per-run warning threshold is USD 1
-and can be changed with `COST_WARNING_USD`.
-Live SSE delivery and history replay feed the same validated, idempotent
-DomainEvent reducer.
+rates are configured.
 
-Local SSE reads the durable SQLite event log directly. Set `REDIS_URL` when an
-external event fan-out is needed; the atomic Outbox publisher retains
-unpublished events during Redis outages and resumes from them after recovery.
+Agent Server is the only durable runtime authority. Live SSE directly proxies
+its resumable per-run stream. Reload uses Agent Server thread state/run history
+plus the Daytona artifact manifest; SQLite contains no run or event mirror.
 
 ## Quality checks
 
@@ -80,7 +77,7 @@ make test
 ```
 
 `make test` runs both the Python contract/golden suite and the browser
-DomainEvent reducer tests.
+transient Agent Event reducer tests.
 
 After exporting real credentials in the local shell, run the paid provider
 gates separately:
@@ -93,7 +90,7 @@ This verifies the configured OpenAI model plus Daytona create, execute,
 blocked-egress, upload/download, stop/start, archive/restore checksum, and
 cleanup lifecycle. It also runs the complete local two-service vertical slice:
 upload → finance tool → dataset materialization → Daytona Python → report and
-widget → async researcher → durable events and replay checks, plus a real
+widget → async researcher → Agent Server state/snapshot checks, plus a real
 Ask User interrupt/resume cycle. When a LangSmith key is configured, it also
 queries the isolated LangSmith project through the LangSmith CLI to prove that
 the real trace tree is available. It never runs as part of the normal unit

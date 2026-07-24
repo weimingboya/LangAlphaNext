@@ -97,11 +97,16 @@ def _emit_custom(payload: dict[str, object]) -> None:
     writer(payload)
 
 
-def _artifact_manifest(
+def list_artifact_manifest(
     backend: WorkspaceMappedDaytonaSandbox,
 ) -> dict[str, dict[str, object]]:
-    response = backend.execute(_MANIFEST_COMMAND, timeout=120)
-    if response.exit_code != 0:
+    try:
+        response = backend.execute(_MANIFEST_COMMAND, timeout=120)
+    except TypeError:
+        # Small test doubles and protocol-compatible adapters may omit the
+        # optional timeout keyword.
+        response = backend.execute(_MANIFEST_COMMAND)
+    if response is None or getattr(response, "exit_code", 1) != 0:
         return {}
     manifest: dict[str, dict[str, object]] = {}
     for line in response.output.splitlines():
@@ -455,9 +460,9 @@ class ContextDaytonaSandbox(BaseSandbox):
         timeout: int | None = None,
     ) -> ExecuteResponse:
         backend = self._backend()
-        before = _artifact_manifest(backend)
+        before = list_artifact_manifest(backend)
         response = backend.execute(command, timeout=timeout)
-        after = _artifact_manifest(backend)
+        after = list_artifact_manifest(backend)
         for path, item in after.items():
             if before.get(path) != item:
                 _emit_artifact(item)
@@ -512,9 +517,9 @@ class ContextDaytonaSandbox(BaseSandbox):
 
     def write(self, file_path: str, content: str) -> WriteResult:
         backend = self._backend()
-        before = _artifact_manifest(backend)
+        before = list_artifact_manifest(backend)
         result = backend.write(file_path, content)
-        self._emit_manifest_changes(before, _artifact_manifest(backend))
+        self._emit_manifest_changes(before, list_artifact_manifest(backend))
         return result
 
     async def awrite(self, file_path: str, content: str) -> WriteResult:
@@ -528,14 +533,14 @@ class ContextDaytonaSandbox(BaseSandbox):
         replace_all: bool = False,
     ) -> EditResult:
         backend = self._backend()
-        before = _artifact_manifest(backend)
+        before = list_artifact_manifest(backend)
         result = backend.edit(
             file_path,
             old_string,
             new_string,
             replace_all=replace_all,
         )
-        self._emit_manifest_changes(before, _artifact_manifest(backend))
+        self._emit_manifest_changes(before, list_artifact_manifest(backend))
         return result
 
     async def aedit(

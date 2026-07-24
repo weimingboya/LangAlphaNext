@@ -1,8 +1,8 @@
 import {
   buildChartModel,
-  initialEventProjection,
-  reduceDomainEvent,
-} from "/static/domain-events.mjs";
+  initialAgentProjection,
+  reduceAgentEvent,
+} from "/static/agent-events.mjs";
 
 const state = {
   threads: [],
@@ -10,7 +10,7 @@ const state = {
   activeRunId: null,
   events: [],
   stream: null,
-  projection: initialEventProjection(),
+  projection: initialAgentProjection(),
 };
 
 const threadList = document.querySelector("#thread-list");
@@ -42,7 +42,7 @@ function renderThreads() {
     button.className = `thread-row${thread.id === state.activeThread?.id ? " active" : ""}`;
     button.textContent = thread.title;
     button.type = "button";
-    button.addEventListener("click", () => selectThread(thread));
+    button.addEventListener("click", () => selectThread(thread).catch(showError));
     threadList.append(button);
   }
 }
@@ -81,9 +81,6 @@ function eventText(event) {
       ? `Usage: ${tokens} tokens`
       : `Usage: ${tokens} tokens · $${Number(cost).toFixed(4)}`;
   }
-  if (event.type === "cost.warning") {
-    return `Cost warning: $${Number(payload.estimated_run_cost_usd).toFixed(4)}`;
-  }
   return event.type.replaceAll(".", " ");
 }
 
@@ -110,7 +107,7 @@ function messageProjection() {
     }
   }
   projected.push(...deltas.values());
-  return projected.sort((left, right) => left.sequence - right.sequence);
+  return projected;
 }
 
 function interruptValue(event) {
@@ -122,12 +119,14 @@ function interruptValue(event) {
 
 async function resumeInterrupt(event, value) {
   setStatus("Resuming analysis");
-  const run = await api(`/api/runs/${event.run_id}/resume`, {
+  const threadId = state.activeThread.id;
+  const run = await api(`/api/threads/${threadId}/runs/${event.run_id}/resume`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ value }),
   });
   state.activeRunId = run.id;
+  connectRun(threadId, run.id);
 }
 
 function renderInterrupt(event) {
@@ -512,73 +511,170 @@ function setStatus(label, mode = "active") {
 }
 
 function recordEvent(event) {
-  state.projection = reduceDomainEvent(state.projection, event);
+  state.projection = reduceAgentEvent(state.projection, event);
   state.events = state.projection.events;
   state.activeRunId = state.projection.activeRunId;
   setStatus(state.projection.status.label, state.projection.status.mode);
 }
 
-function connectEvents(threadId) {
+function connectRun(threadId, runId) {
   state.stream?.close();
-  state.projection = initialEventProjection();
-  state.events = [];
-  renderEvents();
-  state.stream = new EventSource(`/api/threads/${threadId}/events`);
+  state.stream = new EventSource(`/api/threads/${threadId}/runs/${runId}/stream`);
   const types = [
-    "run.started",
     "run.success",
     "run.error",
     "run.interrupted",
     "run.cancelled",
-    "run.timeout",
-    "user.message",
     "message.delta",
     "message.completed",
-    "agent.state.updated",
+    "state.updated",
     "agent.custom",
     "agent.metadata",
-    "todo.updated",
     "sandbox.bound",
-    "artifact.created",
     "artifact.updated",
     "widget.ready",
-    "usage.updated",
-    "cost.warning",
     "interrupt.requested",
-    "interrupt.resumed",
-    "steering.accepted",
     "steering.delivered",
-    "steering.reclaimed",
   ];
   for (const type of types) {
     state.stream.addEventListener(type, (incoming) => {
       const event = JSON.parse(incoming.data);
       recordEvent(event);
-      if (["artifact.created", "artifact.updated"].includes(type)) addFile(event.payload);
+      if (type === "artifact.updated") addFile(event.payload);
+      if (type.startsWith("run.")) state.stream?.close();
       renderEvents();
     });
   }
 }
 
-async function loadArtifacts(threadId) {
-  const artifacts = await api(`/api/threads/${threadId}/artifacts`);
-  fileList.replaceChildren();
-  if (!artifacts.length) {
-    fileList.innerHTML = '<p class="muted">No files yet.</p>';
-    return;
-  }
-  for (const artifact of artifacts.reverse()) addFile(artifact);
+function snapshotEvent(threadId, runId, type, payload, id) {
+  return {
+    id,
+    thread_id: threadId,
+    run_id: runId,
+    type,
+    payload,
+    created_at: new Date().toISOString(),
+  };
 }
 
-function selectThread(thread) {
+async function loadSnapshot(threadId) {
+  const snapshot = await api(`/api/threads/${threadId}/snapshot`);
+  state.projection = initialAgentProjection();
+  state.events = [];
+  const fallbackRunId = snapshot.runs[0]?.id || `snapshot:${threadId}`;
+  for (const message of snapshot.messages) {
+    if (message.role === "user") {
+      recordEvent(
+        snapshotEvent(
+          threadId,
+          fallbackRunId,
+          "user.message",
+          { content: message.content },
+          `snapshot:message:${message.id}`,
+        ),
+      );
+    } else if (message.role === "assistant") {
+      recordEvent(
+        snapshotEvent(
+          threadId,
+          fallbackRunId,
+          "message.completed",
+          message,
+          `snapshot:message:${message.id}`,
+        ),
+      );
+    }
+  }
+  for (const widget of snapshot.widgets) {
+    recordEvent(
+      snapshotEvent(
+        threadId,
+        fallbackRunId,
+        "widget.ready",
+        { widget },
+        `snapshot:widget:${widget.id}`,
+      ),
+    );
+  }
+  if (snapshot.todos.length) {
+    recordEvent(
+      snapshotEvent(
+        threadId,
+        fallbackRunId,
+        "todo.updated",
+        { todos: snapshot.todos },
+        `snapshot:todos:${threadId}`,
+      ),
+    );
+  }
+  if (snapshot.usage.total_tokens) {
+    recordEvent(
+      snapshotEvent(
+        threadId,
+        fallbackRunId,
+        "usage.updated",
+        snapshot.usage,
+        `snapshot:usage:${threadId}`,
+      ),
+    );
+  }
+  const interrupted = snapshot.runs.find((run) => run.status === "interrupted");
+  if (snapshot.interrupts.length && interrupted) {
+    recordEvent(
+      snapshotEvent(
+        threadId,
+        interrupted.id,
+        "interrupt.requested",
+        { interrupts: snapshot.interrupts },
+        `snapshot:interrupt:${interrupted.id}`,
+      ),
+    );
+  }
+  fileList.replaceChildren();
+  if (!snapshot.artifacts.length) {
+    fileList.innerHTML = '<p class="muted">No files yet.</p>';
+  } else {
+    for (const artifact of [...snapshot.artifacts].reverse()) addFile(artifact);
+  }
+  const active = snapshot.runs.find((run) =>
+    ["pending", "running"].includes(run.status),
+  );
+  if (active) {
+    recordEvent(
+      snapshotEvent(
+        threadId,
+        active.id,
+        "run.started",
+        active,
+        `snapshot:run:${active.id}`,
+      ),
+    );
+    connectRun(threadId, active.id);
+  } else if (!interrupted && snapshot.runs.length) {
+    const latest = snapshot.runs[0];
+    recordEvent(
+      snapshotEvent(
+        threadId,
+        latest.id,
+        `run.${latest.status}`,
+        latest,
+        `snapshot:terminal:${latest.id}:${latest.status}`,
+      ),
+    );
+  }
+  renderEvents();
+}
+
+async function selectThread(thread) {
   state.activeThread = thread;
   state.activeRunId = null;
+  state.stream?.close();
   evidenceList.innerHTML = '<p class="muted">Tool and data events will appear here.</p>';
   fileList.innerHTML = '<p class="muted">No files yet.</p>';
   setStatus("Ready", "idle");
   renderThreads();
-  connectEvents(thread.id);
-  loadArtifacts(thread.id).catch(showError);
+  await loadSnapshot(thread.id);
 }
 
 async function createThread() {
@@ -588,7 +684,7 @@ async function createThread() {
     body: JSON.stringify({ title: "New research" }),
   });
   state.threads.unshift(thread);
-  selectThread(thread);
+  await selectThread(thread);
 }
 
 async function ensureThread() {
@@ -608,6 +704,20 @@ async function submitMessage(event) {
     body: JSON.stringify({ message }),
   });
   state.activeRunId = run.id;
+  recordEvent(
+    snapshotEvent(
+      thread.id,
+      run.id,
+      "user.message",
+      { content: message },
+      `local:user:${run.id}`,
+    ),
+  );
+  recordEvent(
+    snapshotEvent(thread.id, run.id, "run.started", run, `local:run:${run.id}`),
+  );
+  connectRun(thread.id, run.id);
+  renderEvents();
   messageInput.value = "";
   setStatus("Analysis running");
 }
@@ -646,7 +756,8 @@ async function uploadFile() {
 async function sendGuidance() {
   const message = guidanceInput.value.trim();
   if (!message || !state.activeRunId) return;
-  await api(`/api/runs/${state.activeRunId}/guidance`, {
+  const threadId = state.activeThread.id;
+  await api(`/api/threads/${threadId}/runs/${state.activeRunId}/guidance`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message }),
@@ -657,7 +768,10 @@ async function sendGuidance() {
 
 async function cancelRun() {
   if (!state.activeRunId) return;
-  await api(`/api/runs/${state.activeRunId}/cancel`, { method: "POST" });
+  const threadId = state.activeThread.id;
+  await api(`/api/threads/${threadId}/runs/${state.activeRunId}/cancel`, {
+    method: "POST",
+  });
   state.activeRunId = null;
   setStatus("Run cancelled", "idle");
 }
@@ -670,7 +784,7 @@ async function initialize() {
   state.threads = await api("/api/threads");
   renderThreads();
   setStatus("Ready", "idle");
-  if (state.threads.length) selectThread(state.threads[0]);
+  if (state.threads.length) await selectThread(state.threads[0]);
 }
 
 document.querySelector("#new-thread").addEventListener("click", createThread);

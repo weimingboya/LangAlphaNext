@@ -1,72 +1,78 @@
-# DomainEvent contract
+# Agent Event and snapshot contract
 
-Every browser-visible event has this envelope:
+LangAlpha does not maintain a second durable runtime event log. Agent Server is
+the source of truth for runs, checkpoints, messages, interrupts, history, and
+resumable stream cursors.
+
+## Live stream
+
+The browser follows one Agent Server run through the BFF:
+
+```http
+GET /api/threads/{product_thread_id}/runs/{graph_run_id}/stream
+Last-Event-ID: <agent-server-event-id>
+```
+
+The BFF calls `runs.join_stream(cancel_on_disconnect=False,
+last_event_id=...)`, redacts the payload, and returns a transient envelope:
 
 ```json
 {
-  "schema_version": 1,
-  "delivery": "durable",
-  "sequence": 42,
-  "id": "event-uuid",
-  "source_event_key": "runtime:run-id:message:message-id:final",
-  "project_id": "langalpha-local",
-  "workspace_id": "workspace-uuid",
-  "thread_id": "product-thread-uuid",
-  "turn_id": "turn-uuid",
-  "run_id": "product-run-uuid-or-null",
+  "id": "agent-server-event-id",
+  "thread_id": "product-thread-id",
+  "run_id": "agent-server-run-id",
   "type": "message.completed",
-  "source": {"agent_id": "main", "parent_agent_id": null},
   "payload": {},
   "created_at": "2026-07-24T00:00:00Z"
 }
 ```
 
-`sequence` is the durable cursor. It is monotonically increasing for the local
-database and is used as the SSE `id`. Consumers must ignore unknown event types
-and fields to remain forward compatible.
+`id` is the Agent Server cursor when one is available. A content-derived
+`volatile:*` ID is used only for upstream frames without IDs and is not a
+durability guarantee. The BFF emits one synthetic
+`terminal:<run_id>:<status>` frame after reconciling the run and thread state.
 
-Stable event families currently consumed by the UI:
+Stable UI event types are:
 
-- `user.message`
-- `run.started`, `run.success`, `run.error`, `run.interrupted`,
-  `run.cancelled`, `run.timeout`
 - `message.delta`, `message.completed`
-- `agent.state.updated`, `agent.custom`, `agent.metadata`
-- `todo.updated`, `sandbox.bound`
-- `artifact.created`, `artifact.updated`
-- `widget.ready`, `usage.updated`, `cost.warning`
-- `interrupt.requested`, `interrupt.resumed`
-- `steering.accepted`, `steering.delivered`, `steering.reclaimed`
+- `state.updated`, `agent.custom`, `agent.metadata`
+- `sandbox.bound`, `artifact.updated`, `widget.ready`
+- `interrupt.requested`, `steering.delivered`
+- `run.success`, `run.error`, `run.interrupted`, `run.cancelled`
 
-`source_event_key` is stable for the same runtime fact. The database uniqueness
-constraint and deterministic event ID make replay and rejoin idempotent.
-`DomainEvent` and its Outbox row are committed in one transaction.
+The browser reducer preserves arrival order and ignores duplicate IDs. It does
+not invent a local sequence, replay cursor, or durable source key.
 
-Cancellation has an explicit product intent. Before requesting Agent Server
-cancellation, the control plane durably sets `cancel_requested=true`. Agent
-Server currently reports the resulting runtime state as `interrupted`; the
-adapter maps that state to `run.cancelled` only when the intent flag is present.
-An interrupt caused by HITL or another runtime condition remains
-`run.interrupted`. Both the synchronous cancel endpoint and the stream bridge
-use the same deterministic terminal key, so a race still produces one terminal
-event.
+## Reload and recovery
 
-SSE reconnect:
+Reload does not replay BFF events. It calls:
 
 ```http
-GET /api/threads/{thread_id}/events
-Last-Event-ID: 42
+GET /api/threads/{product_thread_id}/snapshot
 ```
 
-or:
+The response is assembled from:
 
-```http
-GET /api/threads/{thread_id}/events?after=42
-```
+- Agent Server `threads.get_state` for messages, todos, and interrupts;
+- Agent Server `runs.list` for run history and current status;
+- `show_widget` ToolMessages for structured widgets;
+- AI message usage metadata for token/cost totals;
+- the product artifact index reconciled against the bound Daytona workspace.
 
-Agent Server stream modes and Deep Agents internal event versions are adapters,
-not public product contracts.
+HITL is distinguished from cancellation using native semantics:
 
-The browser parses this envelope before reduction. Live SSE frames and replayed
-frames use the same pure reducer; duplicate `id` values are ignored and events
-are projected in durable `sequence` order.
+- a successful Agent Server run with checkpoint interrupts is product
+  `interrupted`;
+- an Agent Server run whose status is `interrupted` after explicit cancel is
+  product `cancelled`;
+- a historical run with a successor whose `parent_run_id` points to it remains
+  product `interrupted` after the checkpoint is resumed.
+
+## Product-owned side effects
+
+Only two live custom events update the product database:
+
+- `sandbox.bound` records the stable Daytona binding;
+- `artifact.changed` upserts product-facing artifact metadata.
+
+These are product resources, not a mirror of Agent Server runtime state.

@@ -1,131 +1,88 @@
 # LangAlpha Next architecture
 
-## Boundaries
+## Runtime ownership
 
-LangAlpha uses one Deep Agents graph family:
+LangAlpha has one Deep Agents experience:
 
 - `main` owns the user-facing turn and asynchronous delegation;
 - `researcher` performs evidence and computation work;
-- `reporter` turns verified evidence into a deliverable.
+- `reporter` produces verified deliverables.
 
-All three graphs are created by `DeepAgentFactory`. No other module may call
-`create_deep_agent`.
+`DeepAgentFactory` is the only place that calls `create_deep_agent`.
 
-LangGraph Agent Server owns execution state. The FastAPI control plane owns
-product identifiers, mappings to Agent Server threads/runs, durable DomainEvents,
-and artifact metadata. The browser consumes only the product API.
+LangGraph Agent Server is the unique runtime system of record. It owns
+assistants, threads, runs, checkpoints, messages, todos, interrupts,
+cancellation, history, Store data, and resumable stream cursors. Production
+uses LangSmith Deployment.
 
-## Native capability reuse
+FastAPI is a thin product BFF. It owns only:
+
+- the product-thread to Agent Server-thread mapping;
+- server-issued project, owner, workspace, and assistant bindings;
+- the stable Daytona sandbox binding;
+- user uploads and product-facing artifact metadata;
+- short-lived user guidance consumed by agent middleware;
+- UI snapshot shaping, redaction, and stream proxying.
+
+SQLite deliberately has only `product_threads`, `runtime_bindings`, `artifacts`,
+and `guidance`. It has no run, checkpoint, message, event, cursor, terminal, or
+Outbox table. Old runtime projection databases are rejected instead of
+silently treated as compatible.
+
+## Request flow
+
+For a new turn the BFF creates an Agent Server run with:
+
+- `multitask_strategy="reject"` for concurrency ownership;
+- `stream_resumable=True`;
+- `messages`, `updates`, and `custom` stream modes;
+- an immutable server-issued `RunContext`;
+- metadata containing product thread, control, and turn IDs.
+
+The public run ID is the Agent Server run ID. The separate control ID exists
+only so `TurnSteeringMiddleware` can claim guidance without trusting browser
+identity.
+
+The UI consumes a per-run SSE proxy over `join_stream`. The BFF stores no cursor
+and does no background stream following. On reload, one snapshot is rebuilt
+from Agent Server state/runs and Daytona artifact metadata. See
+[event-contract.md](event-contract.md).
+
+Resume creates a successor Agent Server run with `command={"resume": value}`
+and `parent_run_id` metadata. Cancel delegates directly to
+`runs.cancel(action="interrupt")`. No compatibility routes or local run state
+machine exist.
+
+## Deep Agents, MCP, and Daytona
 
 The implementation directly reuses Deep Agents for planning, filesystem tools,
 shell/Python execution, summarization, subagents, skills, memory, permissions,
-and model/tool call limits.
+and model/tool limits.
 
-The backend is a context-aware `CompositeBackend`:
+The context-aware `CompositeBackend` routes:
 
-- the default backend is a lazy `ContextDaytonaSandbox`;
-- `/skills/` routes to packaged, read-only application skills;
-- `/memory/` routes to packaged, read-only product memory;
-- `/memories/user/` and `/memories/workspace/` route to the managed
-  LangGraph Store with server-issued user/workspace namespaces;
-- `/memos/` routes to a read-only Store namespace;
-- command execution always routes to Daytona.
+- default workspace operations to lazy `ContextDaytonaSandbox`;
+- `/skills/` and `/memory/` to packaged read-only resources;
+- `/memories/user/` and `/memories/workspace/` to LangGraph Store;
+- `/memos/` to a read-only Store namespace.
 
-This is a direct backend instance rather than the deprecated callable backend
-factory. It reads the immutable LangGraph `RunContext` at operation time, so
-concurrent runs retain workspace isolation without creating sandboxes eagerly.
+There is no `WorkspaceSeeder` or generic initial-file injection. Daytona is
+created only when a workspace operation or upload requires it.
 
-Deep Agents 0.6.12 can enforce read-only permissions on the routed application
-resources above, but it rejects a global filesystem allow/deny policy when the
-backend also exposes `execute`. LangAlpha does not add a file-tool-only policy
-that would leave shell access outside the same contract. Daytona supplies the
-actual host isolation, has no business credentials, and is created with network
-access blocked. The exact upstream limitation is recorded in the spike report.
+MCP servers and credentials remain in the Agent Server host. The model sees MCP
+tool schemas and calls host tools. Large results are materialized under
+`/workspace/input/<logical_operation_id>` and ordinary Daytona Python reads
+those files for computation. Python inside Daytona does not call MCP directly.
+User-visible outputs belong under `/workspace/artifacts`.
 
-## MCP and data computation
+## Deployment and limits
 
-Configured MCP servers are discovered once in the Agent Server process through
-`MultiServerMCPClient`. Business credentials stay in the host environment.
-Business tools never get installed into Daytona.
+Local development runs Agent Server on port 2024 and the BFF on port 8000.
+Production points `LANGGRAPH_SERVER_URL` at LangSmith Deployment configured by
+`langgraph.json`. LangSmith is the only tracing system.
 
-For small results the model can inspect the tool response directly. Data that
-needs batch computation, reuse, charting, or reproducible analysis is
-materialized with `materialize_dataset` to
-`/workspace/input/<logical_operation_id>/<name>.jsonl|csv`, then consumed by
-ordinary Daytona Python. The MCP call still happens in the Agent Server host;
-Python never calls MCP directly. For large data, `source_tool_call_id` resolves
-the prior ToolMessage from Agent state so the model does not copy the records.
-
-There is no `WorkspaceSeeder` and no generic initial-file injection. Built-in
-skills and memory remain on their read-only backend routes; user uploads,
-materialized datasets, and agent-generated artifacts are created only when the
-run needs them. The model discovers business capabilities from MCP tool schemas
-and skills, not from generated client code inside the sandbox. It receives a
-stable `DatasetRef` after materialization, including path, format, schema, row
-count, source, and checksum, then writes ordinary Python that reads that file.
-
-## Streaming and recovery
-
-The local product API starts Agent Server runs as resumable runs and follows
-them with `join_stream`. Raw stream parts are normalized into DomainEvents and
-persisted before they are exposed over SSE.
-
-On API startup, unfinished product runs are discovered from SQLite and
-reattached to Agent Server. SSE clients can reconnect with `Last-Event-ID` or
-`?after=<sequence>` and replay from the durable event log.
-
-The Agent Server stream itself uses resumable `join_stream(last_event_id=...)`.
-Transient disconnects consume a bounded reconnect budget and durable final
-state reconciliation prevents duplicate final messages, usage, artifacts, or
-terminal events.
-
-Product cancellation is modeled separately from runtime interruption. The
-control plane persists `cancel_requested` before invoking Agent Server cancel.
-Only a remote `interrupted` or `cancelled` state observed with that intent is
-projected as product `cancelled`; HITL and other interrupts remain
-`interrupted`. The cancel endpoint and stream follower share a stable terminal
-event key so completion races remain idempotent.
-
-The local projection database enforces at most one `pending` or `running`
-product run per thread with a partial unique index. This closes the
-check-then-create race; the Agent Server remains authoritative for the run's
-actual execution state.
-
-Each durable DomainEvent and its Outbox row are committed atomically. Local SSE
-polls the event log. When `REDIS_URL` is configured, an asyncio publisher sends
-events to `langalpha:events:<thread_id>` with at-least-once delivery and marks
-each row only after Redis acknowledges it; event IDs keep consumers idempotent.
-
-The browser uses one pure DomainEvent reducer for both live SSE and replay.
-Incoming envelopes are shape-checked, ordered by durable sequence, and deduped
-by event ID before UI projection.
-
-Deep Agents event-streaming helpers may be used for in-process diagnostics, but
-the product contract does not depend on their provider-specific event shapes.
-
-## Deployment
-
-Local development uses the in-memory Agent Server on port 2024 and FastAPI on
-port 8000. Production Agent Server deployment uses LangSmith Deployment and the
-repository `langgraph.json`; set OpenAI, Daytona, LangSmith, and MCP variables in
-the deployment environment. The deployment currently pins Agent Server
-`0.10.3` because the latest server and current official Daytona SDK have
-incompatible OpenTelemetry dependency ranges. The pin is removed only after a
-clean dependency resolution and contract rerun.
-
-The control plane remains a separate small service and points
-`LANGGRAPH_SERVER_URL` at the managed deployment. No legacy data migration or
-compatibility adapter is required.
-
-## Limits
-
-The default simplified research-project limits are:
-
-- 40 model calls per run;
-- 150 tool calls per run;
-- 3 async task starts per run;
-- 20 minutes wall-clock time per run;
-- USD 1 estimated-cost warning when explicit model rates are configured;
-- Daytona auto-stop after 60 idle minutes and auto-archive after seven days.
-
-LangSmith tracing is the sole trace system when its key is configured.
+The simplified research defaults are 40 model calls, 150 tool calls, three
+async task starts, 20 minutes per run, 25 MiB uploads, Daytona auto-stop after
+60 idle minutes, and auto-archive after seven days. Estimated cost is shown
+only when both model rates are configured; it is derived from Agent Server
+message state and is not persisted locally.

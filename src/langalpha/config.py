@@ -29,7 +29,6 @@ class Settings(BaseSettings):
         default=None,
         alias="OPENAI_OUTPUT_COST_PER_MILLION",
     )
-    cost_warning_usd: float = Field(default=1.0, ge=0, alias="COST_WARNING_USD")
 
     daytona_api_key: SecretStr | None = Field(default=None, alias="DAYTONA_API_KEY")
     daytona_target: str = Field(default="us", alias="DAYTONA_TARGET")
@@ -53,15 +52,6 @@ class Settings(BaseSettings):
     )
     langalpha_project_id: str = Field(default="langalpha-local", alias="LANGALPHA_PROJECT_ID")
     langalpha_owner_id: str = Field(default="local-user", alias="LANGALPHA_OWNER_ID")
-    redis_url: SecretStr | None = Field(default=None, alias="REDIS_URL")
-    redis_event_channel_prefix: str = Field(
-        default="langalpha:events",
-        alias="REDIS_EVENT_CHANNEL_PREFIX",
-    )
-    outbox_poll_interval_seconds: float = Field(
-        default=0.5,
-        alias="OUTBOX_POLL_INTERVAL_SECONDS",
-    )
 
     mcp_connections: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
@@ -86,8 +76,6 @@ class Settings(BaseSettings):
     max_run_seconds: int = 1_200
     max_async_subagents: int = 3
     max_upload_bytes: int = 25 * 1024 * 1024
-    stream_reconnect_attempts: int = 8
-    stream_reconnect_max_delay_seconds: float = 5.0
 
     def require_openai_key(self) -> str:
         if self.openai_api_key is None:

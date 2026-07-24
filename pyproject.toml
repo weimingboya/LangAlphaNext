@@ -20,7 +20,6 @@ dependencies = [
     "orjson==3.11.9",
     "pydantic-settings==2.14.2",
     "python-multipart==0.0.32",
-    "redis==6.4.0",
     "uvicorn[standard]==0.51.0",
 ]
 

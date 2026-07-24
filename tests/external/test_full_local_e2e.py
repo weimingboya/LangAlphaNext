@@ -136,13 +136,14 @@ def _cleanup_daytona(project_id: str, workspace_id: str) -> None:
 
 def _wait_for_run(
     client: httpx.Client,
+    thread_id: str,
     run_id: str,
     *,
     timeout: float = 1_200,
 ) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        response = client.get(f"/api/runs/{run_id}")
+        response = client.get(f"/api/threads/{thread_id}/runs/{run_id}")
         response.raise_for_status()
         current = response.json()
         if current["status"] in {
@@ -154,6 +155,26 @@ def _wait_for_run(
             return current
         time.sleep(1)
     pytest.fail(f"run did not reach a terminal or interrupted state: {run_id}")
+
+
+def _consume_run_stream(
+    client: httpx.Client,
+    thread_id: str,
+    run_id: str,
+    *,
+    timeout: float = 1_200,
+) -> list[str]:
+    event_types: list[str] = []
+    with client.stream(
+        "GET",
+        f"/api/threads/{thread_id}/runs/{run_id}/stream",
+        timeout=timeout,
+    ) as response:
+        response.raise_for_status()
+        for line in response.iter_lines():
+            if line.startswith("event: "):
+                event_types.append(line.removeprefix("event: "))
+    return event_types
 
 
 def _assert_no_credentials_persisted(root: Path) -> None:
@@ -254,7 +275,8 @@ def test_real_local_vertical_slice(tmp_path) -> None:
                 )
                 request.raise_for_status()
                 run = request.json()
-                current = _wait_for_run(client, run["id"])
+                event_types = _consume_run_stream(client, thread["id"], run["id"])
+                current = _wait_for_run(client, thread["id"], run["id"])
                 assert current["status"] == "success"
 
                 runtime_state = client.get(f"/internal/threads/{thread['id']}/state")
@@ -273,33 +295,21 @@ def test_real_local_vertical_slice(tmp_path) -> None:
                 downloaded.raise_for_status()
                 assert b"AAPL" in downloaded.content
                 assert b"MSFT" in downloaded.content
+                snapshot = client.get(f"/api/threads/{thread['id']}/snapshot").json()
+                assert snapshot["widgets"]
+                assert snapshot["usage"]["total_tokens"] > 0
+                assert snapshot["runs"][0]["status"] == "success"
 
             with sqlite3.connect(database) as db:
-                event_types = [
+                tables = {
                     row[0]
-                    for row in db.execute(
-                        "SELECT type FROM domain_events WHERE thread_id = ? ORDER BY sequence",
-                        (thread["id"],),
-                    )
-                ]
-                duplicate_events = db.execute(
-                    """
-                    SELECT COUNT(*) FROM (
-                        SELECT source_event_key, type, COUNT(*) AS count
-                        FROM domain_events
-                        WHERE thread_id = ?
-                        GROUP BY source_event_key, type
-                        HAVING count > 1
-                    )
-                    """,
-                    (thread["id"],),
-                ).fetchone()[0]
+                    for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+                }
             assert "sandbox.bound" in event_types
             assert "artifact.updated" in event_types
             assert "widget.ready" in event_types
-            assert "usage.updated" in event_types
             assert "run.success" in event_types
-            assert duplicate_events == 0
+            assert not tables & {"product_runs", "domain_events", "event_outbox"}
         finally:
             if workspace_id:
                 _cleanup_daytona(project_id, workspace_id)
@@ -330,33 +340,49 @@ def test_real_local_hitl_interrupt_and_resume(tmp_path) -> None:
                 },
             )
             request.raise_for_status()
-            interrupted = _wait_for_run(client, request.json()["id"], timeout=300)
+            first = request.json()
+            first_events = _consume_run_stream(
+                client,
+                thread["id"],
+                first["id"],
+                timeout=300,
+            )
+            interrupted = _wait_for_run(
+                client,
+                thread["id"],
+                first["id"],
+                timeout=300,
+            )
             assert interrupted["status"] == "interrupted"
 
             resumed_response = client.post(
-                f"/api/runs/{interrupted['id']}/resume",
+                (f"/api/threads/{thread['id']}/runs/{interrupted['id']}/resume"),
                 json={"value": "US technology equities"},
             )
             resumed_response.raise_for_status()
+            resumed_created = resumed_response.json()
+            resumed_events = _consume_run_stream(
+                client,
+                thread["id"],
+                resumed_created["id"],
+                timeout=300,
+            )
             resumed = _wait_for_run(
                 client,
-                resumed_response.json()["id"],
+                thread["id"],
+                resumed_created["id"],
                 timeout=300,
             )
             assert resumed["status"] == "success"
             assert resumed["parent_run_id"] == interrupted["id"]
             assert resumed["turn_id"] == interrupted["turn_id"]
 
+        assert "interrupt.requested" in first_events
+        assert "run.interrupted" in first_events
+        assert "run.success" in resumed_events
         with sqlite3.connect(database) as db:
-            event_types = [
-                row[0]
-                for row in db.execute(
-                    "SELECT type FROM domain_events WHERE thread_id = ? ORDER BY sequence",
-                    (thread["id"],),
-                )
-            ]
-        assert event_types.count("interrupt.requested") == 1
-        assert event_types.count("interrupt.resumed") == 1
-        assert event_types.count("run.interrupted") == 1
-        assert event_types.count("run.success") == 1
+            tables = {
+                row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+            }
+        assert not tables & {"product_runs", "domain_events", "event_outbox"}
     _assert_no_credentials_persisted(tmp_path)

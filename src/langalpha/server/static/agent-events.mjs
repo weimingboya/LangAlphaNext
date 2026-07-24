@@ -2,23 +2,18 @@ const TERMINAL_RUN_EVENTS = new Set([
   "run.success",
   "run.error",
   "run.cancelled",
-  "run.timeout",
 ]);
 
 function requireString(value, field) {
   if (typeof value !== "string" || value.length === 0) {
-    throw new TypeError(`DomainEvent.${field} must be a non-empty string`);
+    throw new TypeError(`AgentEvent.${field} must be a non-empty string`);
   }
   return value;
 }
 
 function finiteNumber(value) {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : null;
-  }
-  if (typeof value !== "string" || value.trim() === "") {
-    return null;
-  }
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string" || value.trim() === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -36,20 +31,14 @@ export function buildChartModel(widget) {
   if (!Array.isArray(widget.y_fields) || widget.y_fields.length === 0) {
     throw new TypeError("Chart widget requires at least one y_field");
   }
-
   const rows = Array.isArray(widget.data)
     ? widget.data
         .filter((row) => row && typeof row === "object" && !Array.isArray(row))
         .slice(0, 50)
     : [];
-  if (rows.length === 0) {
-    throw new TypeError("Chart widget requires data rows");
-  }
-
+  if (!rows.length) throw new TypeError("Chart widget requires data rows");
   const labels = rows.map((row, index) =>
-    row[widget.x_field] === null || row[widget.x_field] === undefined
-      ? String(index + 1)
-      : String(row[widget.x_field]),
+    row[widget.x_field] == null ? String(index + 1) : String(row[widget.x_field]),
   );
   const series = widget.y_fields.slice(0, 6).map((field) => ({
     field: String(field),
@@ -58,48 +47,30 @@ export function buildChartModel(widget) {
   const values = series.flatMap((entry) =>
     entry.values.filter((value) => value !== null),
   );
-  if (values.length === 0) {
-    throw new TypeError("Chart widget contains no numeric y values");
-  }
-
+  if (!values.length) throw new TypeError("Chart widget contains no numeric y values");
   const minimum = Math.min(0, ...values);
   let maximum = Math.max(0, ...values);
-  if (minimum === maximum) {
-    maximum = minimum + 1;
-  }
-  return {
-    kind: widget.kind,
-    labels,
-    series,
-    minimum,
-    maximum,
-  };
+  if (minimum === maximum) maximum = minimum + 1;
+  return { kind: widget.kind, labels, series, minimum, maximum };
 }
 
-export function parseDomainEvent(value) {
+export function parseAgentEvent(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError("DomainEvent must be an object");
-  }
-  if (!Number.isSafeInteger(value.sequence) || value.sequence < 1) {
-    throw new TypeError("DomainEvent.sequence must be a positive integer");
+    throw new TypeError("AgentEvent must be an object");
   }
   if (!value.payload || typeof value.payload !== "object" || Array.isArray(value.payload)) {
-    throw new TypeError("DomainEvent.payload must be an object");
-  }
-  if (value.run_id !== null && value.run_id !== undefined) {
-    requireString(value.run_id, "run_id");
+    throw new TypeError("AgentEvent.payload must be an object");
   }
   return {
     ...value,
     id: requireString(value.id, "id"),
-    source_event_key: requireString(value.source_event_key, "source_event_key"),
     thread_id: requireString(value.thread_id, "thread_id"),
+    run_id: requireString(value.run_id, "run_id"),
     type: requireString(value.type, "type"),
-    run_id: value.run_id ?? null,
   };
 }
 
-export function initialEventProjection() {
+export function initialAgentProjection() {
   return {
     events: [],
     activeRunId: null,
@@ -125,7 +96,6 @@ function eventStatus(event, current) {
       "run.success": "Analysis complete",
       "run.error": event.payload.message || event.payload.error || "Run failed",
       "run.cancelled": "Run cancelled",
-      "run.timeout": "Run timed out",
     };
     return {
       activeRunId: current.activeRunId === event.run_id ? null : current.activeRunId,
@@ -135,25 +105,14 @@ function eventStatus(event, current) {
       },
     };
   }
+  return { activeRunId: current.activeRunId, status: current.status };
+}
+
+export function reduceAgentEvent(current, rawEvent) {
+  const event = parseAgentEvent(rawEvent);
+  if (current.events.some((candidate) => candidate.id === event.id)) return current;
   return {
-    activeRunId: current.activeRunId,
-    status: current.status,
+    events: [...current.events, event],
+    ...eventStatus(event, current),
   };
-}
-
-export function reduceDomainEvent(current, rawEvent) {
-  const event = parseDomainEvent(rawEvent);
-  if (current.events.some((candidate) => candidate.id === event.id)) {
-    return current;
-  }
-  const events = [...current.events, event].sort(
-    (left, right) => left.sequence - right.sequence,
-  );
-  return { events, ...eventStatus(event, current) };
-}
-
-export function replayDomainEvents(events) {
-  return [...events]
-    .sort((left, right) => left.sequence - right.sequence)
-    .reduce(reduceDomainEvent, initialEventProjection());
 }

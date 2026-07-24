@@ -1022,7 +1022,6 @@ dependencies = [
     { name = "orjson" },
     { name = "pydantic-settings" },
     { name = "python-multipart" },
-    { name = "redis" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -1051,7 +1050,6 @@ requires-dist = [
     { name = "orjson", specifier = "==3.11.9" },
     { name = "pydantic-settings", specifier = "==2.14.2" },
     { name = "python-multipart", specifier = "==0.0.32" },
-    { name = "redis", specifier = "==6.4.0" },
     { name = "uvicorn", extras = ["standard"], specifier = "==0.51.0" },
 ]
 
@@ -2059,15 +2057,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/61/34/1b63bc3db8d950139618d1d38eff5648e5aaa53b2982da5ec121fcf72c63/quickjs_rs-0.2.4.tar.gz", hash = "sha256:7226d18bfa05d97fd629348b7d71512dab4da12bfbe29bdd50486bfc10858cc9", size = 829056, upload-time = "2026-06-24T19:42:21.6Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9d/5f/38a30bdfc4fd0a369f1cfe394ea51fbb43a7e492ffe4006f212d24ab05c5/quickjs_rs-0.2.4-py3-none-any.whl", hash = "sha256:3b497b712c4e94401d5617a4c5808b290e2d6bac8e147b315e880306145ae734", size = 799749, upload-time = "2026-06-24T19:42:19.707Z" },
-]
-
-[[package]]
-name = "redis"
-version = "6.4.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/0d/d6/e8b92798a5bd67d659d51a18170e91c16ac3b59738d91894651ee255ed49/redis-6.4.0.tar.gz", hash = "sha256:b01bc7282b8444e28ec36b261df5375183bb47a07eb9c603f284e89cbc5ef010", size = 4647399, upload-time = "2025-08-07T08:10:11.441Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e8/02/89e2ed7e85db6c93dfa9e8f691c5087df4e3551ab39081a4d7c6d1f90e05/redis-6.4.0-py3-none-any.whl", hash = "sha256:f0544fa9604264e9464cdf4814e7d4830f74b165d52f2a330a760a88dd248b7f", size = 279847, upload-time = "2025-08-07T08:10:09.84Z" },
 ]
 
 [[package]]

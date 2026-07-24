@@ -552,7 +552,11 @@ button:disabled {
 
 @media (max-width: 720px) {
   .app-shell {
-    display: block;
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+    min-height: 0;
+    height: 100dvh;
   }
 
   .thread-rail {
@@ -571,12 +575,17 @@ button:disabled {
   }
 
   .research-pane {
-    min-height: calc(100vh - 118px);
+    min-height: 0;
     max-height: none;
   }
 
   .transcript {
+    min-height: 0;
     padding: 28px 22px;
+  }
+
+  .empty-state {
+    min-height: 100%;
   }
 
   .composer {

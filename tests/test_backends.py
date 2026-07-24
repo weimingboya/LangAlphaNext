@@ -189,7 +189,7 @@ def test_artifact_manifest_virtualizes_daytona_physical_paths() -> None:
         Delegate(),  # type: ignore[arg-type]
         physical_root,
     )
-    manifest = module._artifact_manifest(backend)
+    manifest = module.list_artifact_manifest(backend)
 
     assert set(manifest) == {"/workspace/artifacts/report.md"}
     assert manifest["/workspace/artifacts/report.md"]["size_bytes"] == 6

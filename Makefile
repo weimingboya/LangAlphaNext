@@ -14,7 +14,7 @@ dev:
 
 test:
 	uv run pytest -q
-	node --test tests/test_domain_events.mjs
+	node --test tests/test_agent_events.mjs
 
 external-test:
 	RUN_EXTERNAL_E2E=1 uv run --env-file .env pytest -q tests/external
@@ -23,4 +23,4 @@ lint:
 	uv run ruff check src tests
 	uv run ruff format --check src tests
 	node --check src/langalpha/server/static/app.js
-	node --check src/langalpha/server/static/domain-events.mjs
+	node --check src/langalpha/server/static/agent-events.mjs

@@ -37,39 +37,41 @@ RunStatus = Literal[
 ]
 
 
-class ProductRun(BaseModel):
+class RunView(BaseModel):
+    """Product-shaped view of an Agent Server run.
+
+    ``id`` is the Agent Server run ID. ``control_id`` is an opaque per-run
+    identifier used only by in-process steering middleware.
+    """
+
     id: str
     thread_id: str
-    graph_run_id: str | None = None
+    control_id: str
     turn_id: str
     parent_run_id: str | None = None
     status: RunStatus
-    cancel_requested: bool = False
     error: str | None = None
     created_at: datetime
     updated_at: datetime
 
 
-Delivery = Literal["durable", "volatile"]
+class AgentEvent(BaseModel):
+    """Transient UI event proxied from an Agent Server resumable stream."""
 
-
-class DomainEvent(BaseModel):
-    schema_version: int = 1
-    delivery: Delivery = "durable"
-    sequence: int
     id: str
-    source_event_key: str
-    project_id: str
-    workspace_id: str
     thread_id: str
-    turn_id: str | None = None
-    run_id: str | None
+    run_id: str
     type: str
-    source: dict[str, str | None] = Field(
-        default_factory=lambda: {"agent_id": "main", "parent_agent_id": None}
-    )
     payload: dict[str, Any]
-    created_at: datetime
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class UsageSummary(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    cached_input_tokens: int = 0
+    estimated_cost_usd: float | None = None
 
 
 class Artifact(BaseModel):
@@ -97,6 +99,19 @@ class RuntimeBinding(BaseModel):
     sandbox_id: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class ThreadSnapshot(BaseModel):
+    """Reloadable UI projection assembled from authoritative resources."""
+
+    thread: ProductThread
+    runs: list[RunView]
+    messages: list[dict[str, Any]]
+    todos: list[dict[str, Any]]
+    interrupts: list[Any]
+    widgets: list[dict[str, Any]]
+    usage: UsageSummary
+    artifacts: list[Artifact]
 
 
 class ResumeRun(BaseModel):

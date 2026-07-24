@@ -2,37 +2,49 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
+import mimetypes
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from langgraph_sdk import get_client
 
-from langalpha.backends.daytona import get_daytona_backend_for_workspace
+from langalpha.backends.daytona import (
+    get_daytona_backend_for_workspace,
+    list_artifact_manifest,
+)
 from langalpha.config import Settings, get_settings
 from langalpha.domain.models import (
+    AgentEvent,
     Artifact,
-    DomainEvent,
     Guidance,
     GuidanceCreate,
     GuidanceReturn,
-    ProductRun,
     ProductThread,
     ResumeRun,
     RunCreate,
     RuntimeBinding,
+    RunView,
     ThreadCreate,
+    ThreadSnapshot,
+    utc_now,
 )
-from langalpha.server.outbox import RedisOutboxPublisher
-from langalpha.server.repository import ActiveRunConflict, Repository
-from langalpha.server.stream_bridge import RunStreamBridge
+from langalpha.server.agent_gateway import (
+    AgentGateway,
+    normalize_messages,
+    normalize_stream_part,
+    run_view,
+    state_interrupts,
+    state_todos,
+    state_widgets,
+    summarize_usage,
+)
+from langalpha.server.repository import Repository
 
 
 def _safe_filename(value: str) -> str:
@@ -42,57 +54,32 @@ def _safe_filename(value: str) -> str:
     return name[:160]
 
 
-def _event_frame(event: DomainEvent) -> bytes:
-    data = event.model_dump(mode="json")
-    return (
-        f"id: {event.sequence}\n"
-        f"event: {event.type}\n"
-        f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-    ).encode()
+def _event_frame(event: AgentEvent) -> bytes:
+    return (f"id: {event.id}\nevent: {event.type}\ndata: {event.model_dump_json()}\n\n").encode()
+
+
+def _agent_error_status(exc: Exception) -> int:
+    status = getattr(exc, "status_code", None)
+    response = getattr(exc, "response", None)
+    if status is None and response is not None:
+        status = getattr(response, "status_code", None)
+    return 409 if status == 409 else 502
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     app_settings = settings or get_settings()
     repository = Repository(app_settings.langalpha_database_path)
-    bridge = RunStreamBridge(
-        repository,
-        app_settings.langgraph_server_url,
-        max_run_seconds=app_settings.max_run_seconds,
-        max_reconnect_attempts=app_settings.stream_reconnect_attempts,
-        reconnect_max_delay=app_settings.stream_reconnect_max_delay_seconds,
-        input_cost_per_million=app_settings.openai_input_cost_per_million,
-        output_cost_per_million=app_settings.openai_output_cost_per_million,
-        cost_warning_usd=app_settings.cost_warning_usd,
-    )
-    outbox_publisher = (
-        RedisOutboxPublisher(
-            repository,
-            app_settings.redis_url.get_secret_value(),
-            channel_prefix=app_settings.redis_event_channel_prefix,
-            poll_interval=app_settings.outbox_poll_interval_seconds,
-        )
-        if app_settings.redis_url is not None
-        else None
-    )
+    gateway = AgentGateway(app_settings.langgraph_server_url)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         await repository.initialize()
-        if outbox_publisher is not None:
-            outbox_publisher.start()
-        await bridge.recover()
-        try:
-            yield
-        finally:
-            await bridge.close()
-            if outbox_publisher is not None:
-                await outbox_publisher.close()
+        yield
 
-    app = FastAPI(title="LangAlpha Local API", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="LangAlpha BFF", version="0.2.0", lifespan=lifespan)
     app.state.settings = app_settings
     app.state.repository = repository
-    app.state.bridge = bridge
-    app.state.outbox_publisher = outbox_publisher
+    app.state.agent_gateway = gateway
     static_dir = Path(__file__).resolve().parent / "static"
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -104,20 +91,85 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    async def require_thread(thread_id: str) -> ProductThread:
+        thread = await repository.get_thread(thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="thread not found")
+        return thread
+
+    async def require_binding(thread_id: str) -> RuntimeBinding:
+        binding = await repository.get_binding(thread_id)
+        if binding is None:
+            raise HTTPException(status_code=404, detail="runtime binding not found")
+        return binding
+
+    def run_context(
+        *,
+        thread: ProductThread,
+        binding: RuntimeBinding,
+        turn_id: str,
+        control_id: str,
+    ) -> dict[str, str | None]:
+        return {
+            "project_id": binding.project_id,
+            "owner_id": binding.owner_id,
+            "workspace_id": binding.workspace_id,
+            "product_thread_id": thread.id,
+            "turn_id": turn_id,
+            "product_run_id": control_id,
+            "capability_profile": binding.profile,
+            "expected_sandbox_id": binding.sandbox_id,
+        }
+
+    def verify_internal(authorization: str | None) -> None:
+        configured = app_settings.langalpha_internal_token
+        if configured is None:
+            return
+        expected = f"Bearer {configured.get_secret_value()}"
+        if authorization != expected:
+            raise HTTPException(status_code=401, detail="invalid internal token")
+
+    async def backend_for(thread: ProductThread) -> Any:
+        binding = await require_binding(thread.id)
+        backend = await asyncio.to_thread(
+            get_daytona_backend_for_workspace,
+            workspace_id=thread.workspace_id,
+            project_id=app_settings.langalpha_project_id,
+            expected_sandbox_id=binding.sandbox_id,
+        )
+        await repository.bind_sandbox(thread.id, backend.id)
+        return backend
+
+    async def reconcile_artifacts(thread: ProductThread) -> list[Artifact]:
+        binding = await require_binding(thread.id)
+        if binding.sandbox_id is None:
+            return await repository.list_artifacts(thread.id)
+        backend = await backend_for(thread)
+        manifest = await asyncio.to_thread(list_artifact_manifest, backend)
+        for path, item in manifest.items():
+            await repository.upsert_artifact(
+                thread_id=thread.id,
+                run_id=None,
+                name=Path(path).name,
+                sandbox_path=path,
+                media_type=mimetypes.guess_type(path)[0] or "application/octet-stream",
+                size_bytes=int(item.get("size_bytes", 0)),
+                checksum=(str(item["checksum"]) if item.get("checksum") else None),
+            )
+        return await repository.list_artifacts(thread.id)
+
     @app.post("/api/threads", response_model=ProductThread, status_code=201)
     async def create_thread(body: ThreadCreate) -> ProductThread:
-        client = get_client(url=app_settings.langgraph_server_url)
         product_id = str(uuid4())
-        graph_thread = await client.threads.create(
+        graph_thread = await gateway.client.threads.create(
             metadata={
                 "product_thread_id": product_id,
                 "project_id": app_settings.langalpha_project_id,
                 "owner_id": app_settings.langalpha_owner_id,
             }
         )
-        graph_thread_id = str(graph_thread["thread_id"])
         return await repository.create_thread(
-            graph_thread_id=graph_thread_id,
+            graph_thread_id=str(graph_thread["thread_id"]),
             workspace_id=product_id,
             title=body.title,
             thread_id=product_id,
@@ -132,98 +184,42 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/threads/{thread_id}", response_model=ProductThread)
     async def get_thread(thread_id: str) -> ProductThread:
-        thread = await repository.get_thread(thread_id)
-        if thread is None:
-            raise HTTPException(status_code=404, detail="thread not found")
-        return thread
+        return await require_thread(thread_id)
 
     @app.get("/api/threads/{thread_id}/binding", response_model=RuntimeBinding)
     async def get_binding(thread_id: str) -> RuntimeBinding:
-        binding = await repository.get_binding(thread_id)
-        if binding is None:
-            raise HTTPException(status_code=404, detail="runtime binding not found")
-        return binding
+        await require_thread(thread_id)
+        return await require_binding(thread_id)
 
-    def run_context(
-        *,
-        thread: ProductThread,
-        binding: RuntimeBinding,
-        turn_id: str,
-        product_run_id: str,
-    ) -> dict[str, str | None]:
-        return {
-            "project_id": binding.project_id,
-            "owner_id": binding.owner_id,
-            "workspace_id": binding.workspace_id,
-            "product_thread_id": thread.id,
-            "turn_id": turn_id,
-            "product_run_id": product_run_id,
-            "capability_profile": binding.profile,
-            "expected_sandbox_id": binding.sandbox_id,
-        }
-
-    def verify_internal(authorization: str | None) -> None:
-        configured = app_settings.langalpha_internal_token
-        if configured is None:
-            return
-        expected = f"Bearer {configured.get_secret_value()}"
-        if authorization != expected:
-            raise HTTPException(status_code=401, detail="invalid internal token")
-
-    @app.post("/api/threads/{thread_id}/runs", response_model=ProductRun, status_code=202)
-    async def create_run(thread_id: str, body: RunCreate) -> ProductRun:
-        thread = await repository.get_thread(thread_id)
-        if thread is None:
-            raise HTTPException(status_code=404, detail="thread not found")
-        binding = await repository.get_binding(thread_id)
-        if binding is None:
-            raise HTTPException(status_code=409, detail="runtime binding not found")
-
-        for open_run in await repository.list_open_runs(thread.id):
-            if open_run.graph_run_id is not None and open_run.status in {
-                "pending",
-                "running",
-            }:
-                try:
-                    open_run = await bridge.remote_status(thread, open_run)
-                except Exception as exc:
-                    raise HTTPException(
-                        status_code=503,
-                        detail="cannot verify the active Agent Server run",
-                    ) from exc
-            if open_run.status in {"pending", "running", "interrupted"}:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "thread already has an active run; resume an interrupt "
-                        "instead of starting a new turn"
-                    ),
-                )
-
-        product_run_id = str(uuid4())
-        turn_id = str(uuid4())
-        await repository.append_event(
-            thread_id=thread.id,
-            run_id=None,
-            event_type="user.message",
-            payload={"content": body.message, "turn_id": turn_id},
-            source_event_key=f"turn:{turn_id}:user-message",
-        )
+    @app.post(
+        "/api/threads/{thread_id}/runs",
+        response_model=RunView,
+        status_code=202,
+    )
+    async def create_run(thread_id: str, body: RunCreate) -> RunView:
+        thread = await require_thread(thread_id)
+        binding = await require_binding(thread_id)
         try:
-            run = await repository.create_run(
-                thread_id=thread.id,
-                graph_run_id=None,
-                run_id=product_run_id,
-                turn_id=turn_id,
-            )
-        except ActiveRunConflict as exc:
+            state = await gateway.state(thread.graph_thread_id)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502, detail="Agent Server state is unavailable"
+            ) from exc
+        if state_interrupts(state):
             raise HTTPException(
                 status_code=409,
-                detail="thread already has an active run",
-            ) from exc
-        client = get_client(url=app_settings.langgraph_server_url)
+                detail="thread is waiting for input; resume its interrupted run",
+            )
+
+        control_id = str(uuid4())
+        turn_id = str(uuid4())
+        metadata = {
+            "product_thread_id": thread.id,
+            "product_run_id": control_id,
+            "turn_id": turn_id,
+        }
         try:
-            remote = await client.runs.create(
+            remote = await gateway.create(
                 thread.graph_thread_id,
                 binding.assistant_id,
                 input={"messages": [{"role": "user", "content": body.message}]},
@@ -231,79 +227,88 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     thread=thread,
                     binding=binding,
                     turn_id=turn_id,
-                    product_run_id=product_run_id,
+                    control_id=control_id,
                 ),
-                metadata={
-                    "product_thread_id": thread.id,
-                    "product_run_id": product_run_id,
-                    "turn_id": turn_id,
-                },
-                stream_mode=["messages", "updates", "custom"],
-                stream_subgraphs=True,
-                stream_resumable=True,
+                metadata=metadata,
             )
-            run = await repository.attach_runtime_run(run.id, str(remote["run_id"]))
         except Exception as exc:
-            error = type(exc).__name__
-            await repository.update_run(run.id, "error", error=error)
-            await repository.append_event(
-                thread_id=thread.id,
-                run_id=run.id,
-                event_type="run.error",
-                payload={"run_id": run.id, "error": error},
-                source_event_key=f"product:{run.id}:create-error",
-            )
             raise HTTPException(
-                status_code=502,
-                detail="Agent Server run creation failed",
+                status_code=_agent_error_status(exc),
+                detail=(
+                    "thread already has an active Agent Server run"
+                    if _agent_error_status(exc) == 409
+                    else "Agent Server run creation failed"
+                ),
             ) from exc
-        bridge.watch(thread, run)
-        return run
+        remote.setdefault("metadata", metadata)
+        remote.setdefault("status", "pending")
+        remote.setdefault("created_at", utc_now())
+        await repository.touch_thread(thread.id)
+        return run_view(remote, product_thread_id=thread.id)
 
-    @app.get("/api/runs/{run_id}", response_model=ProductRun)
-    async def get_run(run_id: str) -> ProductRun:
-        run = await repository.get_run(run_id)
-        if run is None:
-            raise HTTPException(status_code=404, detail="run not found")
-        thread = await repository.get_thread(run.thread_id)
-        assert thread is not None
+    @app.get("/api/threads/{thread_id}/runs", response_model=list[RunView])
+    async def list_runs(thread_id: str, limit: int = 50) -> list[RunView]:
+        thread = await require_thread(thread_id)
         try:
-            return await bridge.remote_status(thread, run)
+            return await gateway.runs(
+                thread.graph_thread_id,
+                product_thread_id=thread.id,
+                limit=max(1, min(limit, 100)),
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502, detail="Agent Server runs are unavailable"
+            ) from exc
+
+    @app.get(
+        "/api/threads/{thread_id}/runs/{run_id}",
+        response_model=RunView,
+    )
+    async def get_run(thread_id: str, run_id: str) -> RunView:
+        thread = await require_thread(thread_id)
+        try:
+            return await gateway.run(
+                thread.graph_thread_id,
+                run_id,
+                product_thread_id=thread.id,
+            )
+        except Exception as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            raise HTTPException(
+                status_code=404 if status == 404 else 502,
+                detail="run not found" if status == 404 else "Agent Server status is unavailable",
+            ) from exc
+
+    @app.post(
+        "/api/threads/{thread_id}/runs/{run_id}/resume",
+        response_model=RunView,
+        status_code=202,
+    )
+    async def resume_run(thread_id: str, run_id: str, body: ResumeRun) -> RunView:
+        thread = await require_thread(thread_id)
+        binding = await require_binding(thread_id)
+        try:
+            previous = await gateway.run(
+                thread.graph_thread_id,
+                run_id,
+                product_thread_id=thread.id,
+            )
         except Exception as exc:
             raise HTTPException(
                 status_code=502, detail="Agent Server status is unavailable"
             ) from exc
-
-    @app.post("/api/runs/{run_id}/resume", response_model=ProductRun, status_code=202)
-    async def resume_run(run_id: str, body: ResumeRun) -> ProductRun:
-        previous = await repository.get_run(run_id)
-        if previous is None:
-            raise HTTPException(status_code=404, detail="run not found")
-        thread = await repository.get_thread(previous.thread_id)
-        assert thread is not None
-        binding = await repository.get_binding(thread.id)
-        assert binding is not None
-        previous = await bridge.remote_status(thread, previous)
         if previous.status != "interrupted":
             raise HTTPException(status_code=409, detail="run is not interrupted")
 
-        product_run_id = str(uuid4())
+        control_id = str(uuid4())
+        metadata = {
+            "product_thread_id": thread.id,
+            "product_run_id": control_id,
+            "turn_id": previous.turn_id,
+            "parent_run_id": previous.id,
+        }
         try:
-            run = await repository.create_run(
-                thread_id=thread.id,
-                graph_run_id=None,
-                run_id=product_run_id,
-                turn_id=previous.turn_id,
-                parent_run_id=previous.id,
-            )
-        except ActiveRunConflict as exc:
-            raise HTTPException(
-                status_code=409,
-                detail="thread already has an active run",
-            ) from exc
-        client = get_client(url=app_settings.langgraph_server_url)
-        try:
-            remote = await client.runs.create(
+            remote = await gateway.create(
                 thread.graph_thread_id,
                 binding.assistant_id,
                 command={"resume": body.value},
@@ -311,109 +316,202 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     thread=thread,
                     binding=binding,
                     turn_id=previous.turn_id,
-                    product_run_id=product_run_id,
+                    control_id=control_id,
                 ),
-                metadata={
-                    "product_thread_id": thread.id,
-                    "product_run_id": product_run_id,
-                    "turn_id": previous.turn_id,
-                    "parent_product_run_id": previous.id,
-                },
-                stream_mode=["messages", "updates", "custom"],
-                stream_subgraphs=True,
-                stream_resumable=True,
+                metadata=metadata,
             )
-            run = await repository.attach_runtime_run(run.id, str(remote["run_id"]))
         except Exception as exc:
-            error = type(exc).__name__
-            await repository.update_run(run.id, "error", error=error)
-            await repository.append_event(
-                thread_id=thread.id,
-                run_id=run.id,
-                event_type="run.error",
-                payload={"run_id": run.id, "error": error},
-                source_event_key=f"product:{run.id}:resume-error",
-            )
             raise HTTPException(
-                status_code=502,
+                status_code=_agent_error_status(exc),
                 detail="Agent Server resume failed",
             ) from exc
-        await repository.append_event(
-            thread_id=thread.id,
-            run_id=run.id,
-            event_type="interrupt.resumed",
-            payload={"parent_run_id": previous.id, "run_id": run.id},
-            source_event_key=f"runtime:{run.graph_run_id}:resume",
-        )
-        bridge.watch(thread, run)
-        return run
+        remote.setdefault("metadata", metadata)
+        remote.setdefault("status", "pending")
+        remote.setdefault("created_at", utc_now())
+        await repository.transfer_open_guidance(previous.control_id, control_id)
+        await repository.touch_thread(thread.id)
+        return run_view(remote, product_thread_id=thread.id)
 
-    @app.post("/api/runs/{run_id}/cancel", status_code=204)
-    async def cancel_run(run_id: str) -> Response:
-        run = await repository.get_run(run_id)
-        if run is None:
-            raise HTTPException(status_code=404, detail="run not found")
-        if run.graph_run_id is None:
-            raise HTTPException(status_code=409, detail="runtime run is not attached")
-        thread = await repository.get_thread(run.thread_id)
-        assert thread is not None
-        client = get_client(url=app_settings.langgraph_server_url)
-        await repository.set_cancel_requested(run.id, True)
+    @app.post(
+        "/api/threads/{thread_id}/runs/{run_id}/cancel",
+        status_code=204,
+    )
+    async def cancel_run(thread_id: str, run_id: str) -> Response:
+        thread = await require_thread(thread_id)
         try:
-            await client.runs.cancel(
+            current = await gateway.run(
                 thread.graph_thread_id,
-                run.graph_run_id,
-                wait=True,
+                run_id,
+                product_thread_id=thread.id,
             )
-            run = await bridge.remote_status(thread, run)
+            if current.status not in {"pending", "running"}:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"run no longer accepts cancellation ({current.status})",
+                )
+            await gateway.cancel(thread.graph_thread_id, run_id)
+        except HTTPException:
+            raise
         except Exception as exc:
-            await repository.set_cancel_requested(run.id, False)
-            raise HTTPException(
-                status_code=502,
-                detail="Agent Server cancellation failed",
-            ) from exc
-        if run.status != "cancelled":
-            await repository.set_cancel_requested(run.id, False)
-            raise HTTPException(
-                status_code=409,
-                detail=f"run reached terminal status {run.status} before cancellation",
-            )
-        await repository.append_event(
-            thread_id=thread.id,
-            run_id=run.id,
-            event_type="run.cancelled",
-            payload={"run_id": run.id},
-            source_event_key=f"runtime:{run.graph_run_id}:terminal:cancelled",
-        )
+            raise HTTPException(status_code=502, detail="Agent Server cancellation failed") from exc
         return Response(status_code=204)
 
     @app.post(
-        "/api/runs/{run_id}/guidance",
+        "/api/threads/{thread_id}/runs/{run_id}/guidance",
         response_model=Guidance,
         status_code=202,
     )
-    async def add_guidance(run_id: str, body: GuidanceCreate) -> Guidance:
-        run = await repository.get_run(run_id)
-        if run is None:
-            raise HTTPException(status_code=404, detail="run not found")
-        thread = await repository.get_thread(run.thread_id)
-        assert thread is not None
-        run = await bridge.remote_status(thread, run)
-        if run.status not in {"pending", "running"}:
+    async def add_guidance(
+        thread_id: str,
+        run_id: str,
+        body: GuidanceCreate,
+    ) -> Guidance:
+        thread = await require_thread(thread_id)
+        try:
+            current = await gateway.run(
+                thread.graph_thread_id,
+                run_id,
+                product_thread_id=thread.id,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502, detail="Agent Server status is unavailable"
+            ) from exc
+        if current.status not in {"pending", "running"}:
             raise HTTPException(status_code=409, detail="run no longer accepts guidance")
-        guidance = await repository.create_guidance(
+        return await repository.create_guidance(
             thread_id=thread.id,
-            run_id=run.id,
+            run_id=current.control_id,
             message=body.message,
         )
-        await repository.append_event(
-            thread_id=thread.id,
-            run_id=run.id,
-            event_type="steering.accepted",
-            payload=guidance.model_dump(mode="json"),
-            source_event_key=f"guidance:{guidance.id}:accepted",
+
+    @app.get("/api/threads/{thread_id}/snapshot", response_model=ThreadSnapshot)
+    async def get_snapshot(thread_id: str) -> ThreadSnapshot:
+        thread = await require_thread(thread_id)
+        try:
+            state, runs = await asyncio.gather(
+                gateway.state(thread.graph_thread_id),
+                gateway.runs(
+                    thread.graph_thread_id,
+                    product_thread_id=thread.id,
+                    limit=100,
+                ),
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502, detail="Agent Server snapshot is unavailable"
+            ) from exc
+        messages = normalize_messages(state)
+        artifacts = await reconcile_artifacts(thread)
+        return ThreadSnapshot(
+            thread=thread,
+            runs=runs,
+            messages=messages,
+            todos=state_todos(state),
+            interrupts=state_interrupts(state),
+            widgets=state_widgets(messages),
+            usage=summarize_usage(
+                messages,
+                input_cost_per_million=app_settings.openai_input_cost_per_million,
+                output_cost_per_million=app_settings.openai_output_cost_per_million,
+            ),
+            artifacts=artifacts,
         )
-        return guidance
+
+    @app.get("/api/threads/{thread_id}/runs/{run_id}/stream")
+    async def stream_run(
+        thread_id: str,
+        run_id: str,
+        request: Request,
+        last_event_id: Annotated[
+            str | None,
+            Header(alias="Last-Event-ID"),
+        ] = None,
+    ) -> StreamingResponse:
+        thread = await require_thread(thread_id)
+        try:
+            await gateway.client.runs.get(thread.graph_thread_id, run_id)
+        except Exception as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            raise HTTPException(
+                status_code=404 if status == 404 else 502,
+                detail="run not found" if status == 404 else "Agent Server stream is unavailable",
+            ) from exc
+
+        async def generate() -> AsyncIterator[bytes]:
+            terminal_cursor = bool(
+                last_event_id and last_event_id.startswith(f"terminal:{run_id}:")
+            )
+            if not terminal_cursor:
+                try:
+                    async for part in gateway.client.runs.join_stream(
+                        thread.graph_thread_id,
+                        run_id,
+                        cancel_on_disconnect=False,
+                        last_event_id=last_event_id,
+                    ):
+                        if await request.is_disconnected():
+                            return
+                        event = normalize_stream_part(
+                            part,
+                            product_thread_id=thread.id,
+                            graph_run_id=run_id,
+                        )
+                        if event.type == "sandbox.bound":
+                            sandbox_id = event.payload.get("sandbox_id")
+                            if isinstance(sandbox_id, str):
+                                await repository.bind_sandbox(thread.id, sandbox_id)
+                        elif event.type == "artifact.updated":
+                            path = str(event.payload.get("path") or "")
+                            if path.startswith("/workspace/artifacts/"):
+                                artifact = await repository.upsert_artifact(
+                                    thread_id=thread.id,
+                                    run_id=run_id,
+                                    name=str(event.payload.get("name") or Path(path).name),
+                                    sandbox_path=path,
+                                    media_type=str(
+                                        event.payload.get("media_type")
+                                        or "application/octet-stream"
+                                    ),
+                                    size_bytes=int(event.payload.get("size_bytes") or 0),
+                                    checksum=(
+                                        str(event.payload["checksum"])
+                                        if event.payload.get("checksum")
+                                        else None
+                                    ),
+                                )
+                                event.payload = artifact.model_dump(mode="json")
+                        yield _event_frame(event)
+                except Exception:
+                    # EventSource reconnects with Last-Event-ID. Agent Server is
+                    # the cursor authority, so this BFF intentionally stores no
+                    # reconnect state and emits no false terminal event.
+                    return
+            try:
+                current = await gateway.run(
+                    thread.graph_thread_id,
+                    run_id,
+                    product_thread_id=thread.id,
+                )
+            except Exception:
+                return
+            terminal = AgentEvent(
+                id=f"terminal:{run_id}:{current.status}",
+                thread_id=thread.id,
+                run_id=run_id,
+                type=f"run.{current.status}",
+                payload=current.model_dump(mode="json"),
+            )
+            yield _event_frame(terminal)
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @app.post(
         "/internal/runs/{run_id}/guidance/claim",
@@ -441,75 +539,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await repository.return_guidance(run_id, body.ids)
         return Response(status_code=204)
 
-    @app.get(
-        "/internal/threads/{thread_id}/state",
-        include_in_schema=False,
-    )
+    @app.get("/internal/threads/{thread_id}/state", include_in_schema=False)
     async def get_runtime_state(
         thread_id: str,
         authorization: Annotated[str | None, Header()] = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         verify_internal(authorization)
-        thread = await repository.get_thread(thread_id)
-        if thread is None:
-            raise HTTPException(status_code=404, detail="thread not found")
-        client = get_client(url=app_settings.langgraph_server_url)
-        return await client.threads.get_state(thread.graph_thread_id)
+        thread = await require_thread(thread_id)
+        return await gateway.state(thread.graph_thread_id)
 
-    @app.get(
-        "/internal/threads/{thread_id}/history",
-        include_in_schema=False,
-    )
+    @app.get("/internal/threads/{thread_id}/history", include_in_schema=False)
     async def get_runtime_history(
         thread_id: str,
         limit: int = 20,
         authorization: Annotated[str | None, Header()] = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         verify_internal(authorization)
-        thread = await repository.get_thread(thread_id)
-        if thread is None:
-            raise HTTPException(status_code=404, detail="thread not found")
-        client = get_client(url=app_settings.langgraph_server_url)
-        return await client.threads.get_history(
+        thread = await require_thread(thread_id)
+        history = await gateway.client.threads.get_history(
             thread.graph_thread_id,
             limit=max(1, min(limit, 100)),
         )
-
-    @app.get("/api/threads/{thread_id}/events")
-    async def stream_events(
-        thread_id: str,
-        request: Request,
-        last_event_id: Annotated[str | None, Header()] = None,
-    ) -> StreamingResponse:
-        if await repository.get_thread(thread_id) is None:
-            raise HTTPException(status_code=404, detail="thread not found")
-        try:
-            cursor = int(last_event_id or request.query_params.get("after", "0"))
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail="invalid event cursor") from exc
-
-        async def generate() -> AsyncIterator[bytes]:
-            nonlocal cursor
-            heartbeat_at = asyncio.get_running_loop().time()
-            while not await request.is_disconnected():
-                events = await repository.list_events(thread_id, after_sequence=cursor)
-                for event in events:
-                    cursor = event.sequence
-                    yield _event_frame(event)
-                now = asyncio.get_running_loop().time()
-                if now - heartbeat_at >= 15:
-                    yield b": heartbeat\n\n"
-                    heartbeat_at = now
-                await asyncio.sleep(0.35)
-
-        return StreamingResponse(
-            generate(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-            },
-        )
+        return [
+            item if isinstance(item, dict) else item.model_dump(mode="json") for item in history
+        ]
 
     @app.post(
         "/api/threads/{thread_id}/files",
@@ -520,29 +573,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         thread_id: str,
         file: Annotated[UploadFile, File()],
     ) -> Artifact:
-        thread = await repository.get_thread(thread_id)
-        if thread is None:
-            raise HTTPException(status_code=404, detail="thread not found")
+        thread = await require_thread(thread_id)
         content = await file.read()
         if len(content) > app_settings.max_upload_bytes:
             raise HTTPException(status_code=413, detail="file exceeds upload limit")
         name = _safe_filename(file.filename or "upload.bin")
         path = f"/workspace/uploads/{uuid4()}-{name}"
-        backend = await asyncio.to_thread(
-            get_daytona_backend_for_workspace,
-            workspace_id=thread.workspace_id,
-            project_id=app_settings.langalpha_project_id,
-            expected_sandbox_id=(
-                (await repository.get_binding(thread.id)).sandbox_id  # type: ignore[union-attr]
-            ),
-        )
+        backend = await backend_for(thread)
         await asyncio.to_thread(backend.execute, "mkdir -p /workspace/uploads")
         responses = await asyncio.to_thread(backend.upload_files, [(path, content)])
         if not responses or responses[0].error:
             detail = responses[0].error if responses else "empty upload response"
             raise HTTPException(status_code=502, detail=f"sandbox upload failed: {detail}")
-        await repository.bind_sandbox(thread.id, backend.id)
-        artifact = await repository.upsert_artifact(
+        return await repository.upsert_artifact(
             thread_id=thread.id,
             run_id=None,
             name=name,
@@ -551,36 +594,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             size_bytes=len(content),
             checksum=hashlib.sha256(content).hexdigest(),
         )
-        await repository.append_event(
-            thread_id=thread.id,
-            run_id=None,
-            event_type="artifact.created",
-            payload=artifact.model_dump(mode="json"),
-            source_event_key=f"artifact:{artifact.id}:{artifact.checksum}",
-        )
-        return artifact
 
     @app.get("/api/threads/{thread_id}/artifacts", response_model=list[Artifact])
     async def list_artifacts(thread_id: str) -> list[Artifact]:
-        if await repository.get_thread(thread_id) is None:
-            raise HTTPException(status_code=404, detail="thread not found")
-        return await repository.list_artifacts(thread_id)
+        thread = await require_thread(thread_id)
+        return await reconcile_artifacts(thread)
 
     @app.get("/api/artifacts/{artifact_id}")
     async def download_artifact(artifact_id: str) -> Response:
         artifact = await repository.get_artifact(artifact_id)
         if artifact is None:
             raise HTTPException(status_code=404, detail="artifact not found")
-        thread = await repository.get_thread(artifact.thread_id)
-        assert thread is not None
-        backend = await asyncio.to_thread(
-            get_daytona_backend_for_workspace,
-            workspace_id=thread.workspace_id,
-            project_id=app_settings.langalpha_project_id,
-            expected_sandbox_id=(
-                (await repository.get_binding(thread.id)).sandbox_id  # type: ignore[union-attr]
-            ),
-        )
+        thread = await require_thread(artifact.thread_id)
+        backend = await backend_for(thread)
         responses = await asyncio.to_thread(backend.download_files, [artifact.sandbox_path])
         result = responses[0]
         if result.error or result.content is None:
@@ -589,7 +615,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             content=result.content,
             media_type=artifact.media_type,
             headers={
-                "Content-Disposition": (f'attachment; filename="{_safe_filename(artifact.name)}"')
+                "Content-Disposition": f'attachment; filename="{_safe_filename(artifact.name)}"'
             },
         )
 

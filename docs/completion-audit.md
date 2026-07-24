@@ -20,13 +20,13 @@ is not treated as proof of a real provider, managed deployment, or trace.
 | Official QuickJS PTC | Static allowlist and bounded middleware configuration | Passed locally |
 | Official async subagent surface | Researcher/reporter graph registration plus real start/check task execution | Passed |
 | HITL and steering product contract | Real Ask User checkpoint interrupt/successor resume plus deterministic steering lifecycle | Passed |
-| Thin run control plane | SDK create/get/join/cancel/resume, server-issued identity, one active run per thread | Passed |
-| Durable streaming and recovery | Cursor rejoin 20/20, final-state reconciliation, stable terminal and duplicate suppression | Passed |
-| DomainEvent and Outbox | Atomic insert, deterministic identity, Redis outage retention/retry | Passed |
+| Thin run BFF | SDK create/get/list/join/cancel/resume and server-issued identity | Passed |
+| Agent Server-owned streaming and recovery | Native cursor forwarding, state/run snapshot rebuild, terminal reconciliation | Passed |
+| No duplicate runtime persistence | SQLite schema contains no runs, events, checkpoints, cursors, terminals, or Outbox | Passed |
 | Artifact lifecycle | Upload, manifest projection, stable upsert, list and download | Passed |
-| Product UI | Live/replay reducer, Ask/Plan, guidance, cancel, artifacts, usage and responsive layout | Browser passed |
+| Product UI | Live stream/snapshot reducer, Ask/Plan, guidance, cancel, artifacts, usage and responsive layout | Contract passed |
 | Structured widgets | Metric/table plus native SVG bar/line rendering and invalid-contract fallback | Browser passed |
-| Limits and cost warning | Model/tool/subagent/time limits and cumulative per-run warning | Passed |
+| Limits and usage | Model/tool/subagent/time limits plus snapshot-derived usage/cost | Passed |
 | Secret persistence guard | Recursive event/MCP redaction and real external gate scans DB/WAL/logs | Passed |
 
 Current reproducible local result:
@@ -35,13 +35,11 @@ Current reproducible local result:
 make lint
   passed
 
-make test
-  57 Python tests passed
-  4 paid external tests skipped
-  6 JavaScript reducer/chart tests passed
+uv run pytest -q -m "not external"
+  30 Python tests passed
 
-make external-test
-  4 real external tests passed
+node --test tests/*.mjs
+  4 JavaScript reducer/chart tests passed
 ```
 
 ## Still required before the full objective can be marked complete

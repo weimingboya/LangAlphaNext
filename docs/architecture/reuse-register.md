@@ -1,7 +1,7 @@
 # Official capability reuse register
 
 This register keeps one owner for every core Agent semantic. LangAlpha adapters
-may add product identity, durable event shapes, artifact metadata, and transport,
+may add product identity, artifact metadata, snapshot shaping, and transport,
 but do not implement fallback runtimes.
 
 | Capability | Single owner | LangAlpha extension | Contract evidence |
@@ -15,10 +15,11 @@ but do not implement fallback runtimes.
 | Programmatic tool calling | `CodeInterpreterMiddleware` | Static allowlist and resource limits | Factory tool snapshot |
 | Async subagents | Deep Agents `AsyncSubAgent` | Researcher/reporter graph registration and start limit | Factory tool snapshot |
 | HITL | LangGraph `interrupt` and command resume | Typed Ask User/Plan payloads and product cards | `tests/test_server.py` |
-| Runtime state | LangGraph Agent Server | Product/runtime ID binding only | Repository and server tests |
-| Runtime stream | LangGraph SDK resumable `join_stream` | Stable DomainEvent projection, cursor, reconciliation | Rejoin test in `tests/test_server.py` |
-| Event fan-out | `redis.asyncio` Pub/Sub | Atomic Outbox projection and idempotent event envelope | `tests/test_outbox.py` |
-| Technical trace | LangSmith | Product stores only source, cost, artifact, and event facts | Deployment configuration |
+| Runtime state | LangGraph Agent Server | Product-thread mapping and read-only RunView shaping | Repository and server tests |
+| Runtime stream | LangGraph SDK resumable `join_stream` | Redacted per-run SSE proxy; Agent Server retains cursor | `tests/test_server.py` |
+| Reload/recovery | Agent Server thread state and run history | Snapshot shaping plus Daytona artifact reconciliation | `tests/test_server.py` |
+| Concurrency | Agent Server `multitask_strategy="reject"` | HTTP 409 translation only | `tests/test_server.py` |
+| Technical trace | LangSmith | No parallel trace or runtime-event database | Deployment configuration |
 
 The repository must continue to satisfy:
 
