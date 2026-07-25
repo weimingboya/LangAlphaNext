@@ -5,7 +5,8 @@ import json
 import re
 from datetime import UTC, date, datetime
 from typing import Any, Literal
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
+from zoneinfo import ZoneInfo
 
 import httpx
 from langchain.tools import ToolRuntime, tool
@@ -17,6 +18,7 @@ from langalpha.config import get_settings
 
 _BASE_URL = "https://api.massive.com"
 _SYMBOL = re.compile(r"^[A-Z0-9.^=-]{1,32}$")
+_MARKET_TIMEZONE = ZoneInfo("America/New_York")
 
 
 class PublicRuntimeInput(BaseModel):
@@ -75,7 +77,12 @@ class CorporateActionsInput(PublicRuntimeInput):
         return normalized
 
 
-def _envelope(records: list[dict[str, Any]], *, source: str) -> str:
+def _envelope(
+    records: list[dict[str, Any]],
+    *,
+    source: str,
+    metadata: dict[str, Any] | None = None,
+) -> str:
     return json.dumps(
         {
             "records": records,
@@ -83,6 +90,7 @@ def _envelope(records: list[dict[str, Any]], *, source: str) -> str:
             "source": source,
             "retrieved_at": datetime.now(UTC).isoformat(),
             "notice": "Market data may be delayed; verify before making decisions.",
+            **({"metadata": metadata} if metadata is not None else {}),
         },
         ensure_ascii=False,
     )
@@ -176,22 +184,33 @@ async def market_get_bars(
         f"/v2/aggs/ticker/{quote(symbol, safe='')}/range/{multiplier}/{timespan}/"
         f"{start_date.isoformat()}/{end_date.isoformat()}"
     )
+    params = {
+        "adjusted": str(adjusted).lower(),
+        "sort": "asc",
+        "limit": limit,
+    }
     async with _client() as client:
         payload = await _massive_get(
             client,
             path,
-            params={"adjusted": str(adjusted).lower(), "sort": "asc", "limit": limit},
+            params=params,
         )
     rows = payload.get("results")
     records = []
     for row in rows if isinstance(rows, list) else []:
         timestamp = row.get("t")
+        moment = (
+            datetime.fromtimestamp(timestamp / 1_000, UTC)
+            if isinstance(timestamp, (int, float))
+            else None
+        )
         records.append(
             {
                 "symbol": symbol,
-                "timestamp": (
-                    datetime.fromtimestamp(timestamp / 1_000, UTC).isoformat()
-                    if isinstance(timestamp, (int, float))
+                "timestamp": moment.isoformat() if moment is not None else None,
+                "market_date": (
+                    moment.astimezone(_MARKET_TIMEZONE).date().isoformat()
+                    if moment is not None
                     else None
                 ),
                 "open": row.get("o"),
@@ -203,7 +222,39 @@ async def market_get_bars(
                 "transactions": row.get("n"),
             }
         )
-    return _envelope(records, source=path)
+    observed_dates = [
+        record["market_date"] for record in records if record["market_date"] is not None
+    ]
+    requested_dates = [
+        date.fromordinal(start_date.toordinal() + offset).isoformat()
+        for offset in range((end_date - start_date).days + 1)
+    ]
+    source = f"{_BASE_URL}{path}?{urlencode(params)}"
+    return _envelope(
+        records,
+        source=source,
+        metadata={
+            "request": {
+                "symbol": symbol,
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "multiplier": multiplier,
+                "timespan": timespan,
+                "adjusted": adjusted,
+                "limit": limit,
+            },
+            "market_timezone": "America/New_York",
+            "returned_count": len(records),
+            "observed_market_dates": observed_dates,
+            "calendar_dates_without_bars": [
+                value for value in requested_dates if value not in observed_dates
+            ],
+            "calendar_gap_notice": (
+                "Calendar dates without bars may be weekends or exchange holidays; "
+                "do not label them missing trading days without an exchange calendar."
+            ),
+        },
+    )
 
 
 @tool(args_schema=CorporateActionsInput)
@@ -257,6 +308,12 @@ async def market_get_corporate_actions(
 FINANCE_TOOLS = [
     market_resolve_instrument,
     market_get_snapshots,
+    market_get_bars,
+    market_get_corporate_actions,
+]
+
+RESEARCH_FINANCE_TOOLS = [
+    market_resolve_instrument,
     market_get_bars,
     market_get_corporate_actions,
 ]

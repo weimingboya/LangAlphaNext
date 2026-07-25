@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     sec_user_agent: str | None = Field(default=None, alias="SEC_USER_AGENT")
     fred_api_key: SecretStr | None = Field(default=None, alias="FRED_API_KEY")
     massive_api_key: SecretStr | None = Field(default=None, alias="MASSIVE_API_KEY")
+    massive_snapshots_enabled: bool = Field(
+        default=False,
+        alias="MASSIVE_SNAPSHOTS_ENABLED",
+    )
 
     langgraph_server_url: str = Field(default="http://127.0.0.1:2024", alias="LANGGRAPH_SERVER_URL")
     langgraph_api_key: SecretStr | None = Field(default=None, alias="LANGGRAPH_API_KEY")
@@ -98,6 +102,18 @@ class Settings(BaseSettings):
 
     max_model_calls: int = 20
     max_tool_calls: int = 80
+    max_researcher_model_calls: int = Field(
+        default=16,
+        alias="MAX_RESEARCHER_MODEL_CALLS",
+        ge=2,
+        le=40,
+    )
+    max_researcher_tool_calls: int = Field(
+        default=40,
+        alias="MAX_RESEARCHER_TOOL_CALLS",
+        ge=4,
+        le=120,
+    )
     max_run_seconds: int = 600
     max_async_subagents: int = 3
     max_upload_bytes: int = 25 * 1024 * 1024

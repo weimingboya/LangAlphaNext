@@ -4,7 +4,6 @@ from collections.abc import Sequence
 from typing import Any, Literal
 
 from deepagents import create_deep_agent
-from deepagents.middleware.async_subagents import AsyncSubAgent
 from deepagents.middleware.filesystem import FilesystemPermission
 from langchain.agents.middleware import (
     ModelCallLimitMiddleware,
@@ -15,6 +14,7 @@ from langchain.agents.middleware import (
 from langchain_core.tools import BaseTool
 from langchain_quickjs import CodeInterpreterMiddleware
 
+from langalpha.agent.async_subagents import CompactAsyncSubAgentMiddleware
 from langalpha.agent.context import RunContext
 from langalpha.agent.model import build_model
 from langalpha.agent.prompts import (
@@ -24,8 +24,8 @@ from langalpha.agent.prompts import (
 from langalpha.agent.responses import ResearchResult
 from langalpha.agent.state import LangAlphaAgentState
 from langalpha.agent.tools import HOST_TOOLS
-from langalpha.backends.daytona import get_context_daytona_backend
-from langalpha.capabilities.finance import FINANCE_TOOLS
+from langalpha.backends import get_context_daytona_backend, get_researcher_backend
+from langalpha.capabilities.finance import FINANCE_TOOLS, RESEARCH_FINANCE_TOOLS
 from langalpha.capabilities.macro import MACRO_TOOLS
 from langalpha.capabilities.openai_web import (
     OpenAIWebSearchBudgetMiddleware,
@@ -55,6 +55,19 @@ FILESYSTEM_PERMISSIONS = (
     ),
 )
 
+RESEARCHER_PERMISSIONS = (
+    FilesystemPermission(
+        operations=["write"],
+        paths=["/**"],
+        mode="deny",
+    ),
+)
+
+RESEARCHER_SKILLS = [
+    "/skills/financial-research/",
+    "/skills/sec-filing-analysis/",
+]
+
 
 class DeepAgentFactory:
     """The only place in LangAlpha that constructs Deep Agents."""
@@ -70,27 +83,41 @@ class DeepAgentFactory:
         is_main = profile == "main"
         mcp_tools = list(load_mcp_tools()) if is_main else []
         web_search_tool = build_openai_web_search_tool()
+        main_finance_tools = [
+            tool
+            for tool in FINANCE_TOOLS
+            if tool.name != "market_get_snapshots" or settings.massive_snapshots_enabled
+        ]
         default_tools = (
             [
                 web_search_tool,
                 *HOST_TOOLS,
-                *FINANCE_TOOLS,
+                *main_finance_tools,
                 *SEC_TOOLS,
                 *MACRO_TOOLS,
                 *mcp_tools,
             ]
             if is_main
-            else [web_search_tool]
+            else [
+                web_search_tool,
+                *RESEARCH_FINANCE_TOOLS,
+                *SEC_TOOLS,
+                *MACRO_TOOLS,
+            ]
         )
         selected_tools = list(tools if tools is not None else default_tools)
+        selected_tool_names = {tool.name for tool in selected_tools if isinstance(tool, BaseTool)}
         retryable_tools = [
-            *FINANCE_TOOLS,
-            *SEC_TOOLS,
-            *MACRO_TOOLS,
+            *(
+                tool
+                for tool in [*FINANCE_TOOLS, *SEC_TOOLS, *MACRO_TOOLS]
+                if tool.name in selected_tool_names
+            ),
             *(
                 tool
                 for tool in mcp_tools
-                if tool.name not in {"materialize_dataset", "ask_user", "submit_plan"}
+                if tool.name in selected_tool_names
+                and tool.name not in {"materialize_dataset", "ask_user", "submit_plan"}
             ),
         ]
         ptc_names = [
@@ -98,13 +125,22 @@ class DeepAgentFactory:
             for name in settings.mcp_ptc_allowlist
             if any(tool.name == name for tool in mcp_tools)
         ]
+        ptc_config = (
+            ptc_names
+            if ptc_names and all(isinstance(tool, BaseTool) for tool in selected_tools)
+            else None
+        )
+        model_call_limit = (
+            settings.max_model_calls if is_main else settings.max_researcher_model_calls
+        )
+        tool_call_limit = settings.max_tool_calls if is_main else settings.max_researcher_tool_calls
         middleware: list[Any] = [
             ModelCallLimitMiddleware(
-                run_limit=settings.max_model_calls,
+                run_limit=model_call_limit,
                 exit_behavior="end",
             ),
             ToolCallLimitMiddleware(
-                run_limit=settings.max_tool_calls,
+                run_limit=tool_call_limit,
                 exit_behavior="error",
             ),
             OpenAIWebSearchBudgetMiddleware(
@@ -125,6 +161,17 @@ class DeepAgentFactory:
                     exit_behavior="continue",
                 )
             )
+            middleware.append(
+                CompactAsyncSubAgentMiddleware(
+                    async_subagents=[
+                        {
+                            "name": "researcher",
+                            "description": "并行完成证据检索、数据验证和可复现分析。",
+                            "graph_id": "researcher",
+                        },
+                    ]
+                )
+            )
         if retryable_tools:
             middleware.append(
                 ToolRetryMiddleware(
@@ -142,31 +189,20 @@ class DeepAgentFactory:
                 max_ptc_calls=128,
                 max_result_chars=8_000,
                 subagents=False,
-                ptc=ptc_names,
+                ptc=ptc_config,
                 mode="thread",
             )
         )
-        subagents: list[AsyncSubAgent] | None = None
-        if include_async_subagents:
-            subagents = [
-                {
-                    "name": "researcher",
-                    "description": "并行完成证据检索、数据验证和可复现分析。",
-                    "graph_id": "researcher",
-                },
-            ]
-
         return create_deep_agent(
             name=f"langalpha-{profile}",
             model=build_model(),
             tools=selected_tools,
             system_prompt=_PROMPTS[profile],
             middleware=middleware,
-            subagents=subagents,
-            skills=["/skills/"] if is_main else None,
+            skills=["/skills/"] if is_main else RESEARCHER_SKILLS,
             memory=["/memory/AGENTS.md"] if is_main else None,
-            permissions=list(FILESYSTEM_PERMISSIONS) if is_main else None,
-            backend=get_context_daytona_backend() if is_main else None,
+            permissions=(list(FILESYSTEM_PERMISSIONS) if is_main else list(RESEARCHER_PERMISSIONS)),
+            backend=(get_context_daytona_backend() if is_main else get_researcher_backend()),
             response_format=_RESPONSE_FORMATS[profile],
             state_schema=LangAlphaAgentState,
             context_schema=RunContext if is_main else None,

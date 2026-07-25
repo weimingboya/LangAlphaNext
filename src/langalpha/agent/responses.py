@@ -12,6 +12,4 @@ class EvidenceItem(BaseModel):
 class ResearchResult(BaseModel):
     summary: str = Field(min_length=1)
     evidence: list[EvidenceItem]
-    dataset_paths: list[str] = Field(default_factory=list)
-    artifact_paths: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)

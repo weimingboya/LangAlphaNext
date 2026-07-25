@@ -17,6 +17,7 @@ from langalpha.config import get_settings
 _CIK = re.compile(r"^\d{1,10}$")
 _ACCESSION = re.compile(r"^\d{10}-\d{2}-\d{6}$")
 _DOCUMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
+_SEARCH_TERM = re.compile(r"[a-z0-9]+")
 
 
 class PublicRuntimeInput(BaseModel):
@@ -156,6 +157,26 @@ def _envelope(records: list[dict[str, Any]], *, source: str) -> str:
     )
 
 
+def _search_terms(value: str) -> tuple[str, ...]:
+    return tuple(_SEARCH_TERM.findall(value.casefold()))
+
+
+def _normalized_financial_value(value: Any, unit: str) -> dict[str, Any] | None:
+    if unit.upper() != "USD" or isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return {
+        "raw": value,
+        "unit": "USD",
+        "usd_millions": round(value / 1_000_000, 6),
+        "usd_billions": round(value / 1_000_000_000, 6),
+        "usd_hundred_millions": round(value / 100_000_000, 6),
+        "display_rule": (
+            "Use usd_billions for USD billions; Chinese 亿美元 equals "
+            "usd_hundred_millions. Do not recalculate these values mentally."
+        ),
+    }
+
+
 @tool(args_schema=ResolveCompanyInput)
 async def sec_resolve_company(
     query: str,
@@ -167,7 +188,10 @@ async def sec_resolve_company(
     source = "https://www.sec.gov/files/company_tickers.json"
     async with _client() as client:
         payload = (await _get(client, source)).json()
-    normalized = query.casefold().strip()
+    normalized = " ".join(_search_terms(query))
+    query_terms = set(_search_terms(query))
+    if not query_terms:
+        return _envelope([], source=source)
     rows = payload.values() if isinstance(payload, dict) else []
     ranked = []
     for row in rows:
@@ -176,10 +200,21 @@ async def sec_resolve_company(
         ticker = str(row.get("ticker", ""))
         title = str(row.get("title", ""))
         cik = str(row.get("cik_str", ""))
-        haystack = f"{ticker} {title} {cik}".casefold()
-        if normalized not in haystack:
+        normalized_ticker = ticker.casefold()
+        normalized_title = " ".join(_search_terms(title))
+        normalized_cik = cik.lstrip("0")
+        haystack = " ".join((normalized_ticker, normalized_title, normalized_cik))
+        haystack_terms = set(_search_terms(haystack))
+        if normalized not in haystack and not query_terms.issubset(haystack_terms):
             continue
-        rank = 0 if normalized in {ticker.casefold(), cik.lstrip("0")} else 1
+        if normalized in {normalized_ticker, normalized_cik}:
+            rank = 0
+        elif normalized == normalized_title:
+            rank = 1
+        elif normalized in haystack:
+            rank = 2
+        else:
+            rank = 3
         ranked.append(
             (
                 rank,
@@ -342,16 +377,21 @@ async def sec_get_company_facts(
                         continue
                     if end_date and comparison_date and comparison_date > end_date.isoformat():
                         continue
-                    concept_rows.append(
-                        {
-                            "taxonomy": taxonomy,
-                            "concept": tag,
-                            "label": label,
-                            "description": fact.get("description"),
-                            "unit": unit,
-                            **observation,
-                        }
+                    row = {
+                        "taxonomy": taxonomy,
+                        "concept": tag,
+                        "label": label,
+                        "description": fact.get("description"),
+                        "unit": unit,
+                        **observation,
+                    }
+                    normalized_value = _normalized_financial_value(
+                        observation.get("val"),
+                        unit,
                     )
+                    if normalized_value is not None:
+                        row["normalized_value"] = normalized_value
+                    concept_rows.append(row)
             concept_rows.sort(key=lambda row: str(row.get("filed", "")), reverse=True)
             records.extend(concept_rows[:limit_per_concept])
     return _envelope(records, source=source)

@@ -83,6 +83,12 @@ also owns fixed host-side tools for:
 - FRED series discovery and observations;
 - Massive instrument resolution, snapshots, aggregate bars and corporate actions.
 
+Massive snapshots are entitlement-gated and remain hidden unless
+`MASSIVE_SNAPSHOTS_ENABLED=true`. The researcher receives only read-only SEC,
+FRED, Massive instrument, historical-bar and corporate-action tools. It loads
+the `financial-research` and `sec-filing-analysis` skills from a lightweight
+resource backend and does not provision or write to Daytona.
+
 There is no provider fallback in this phase. A failed primary provider remains
 visible rather than being silently replaced by a source with different
 semantics. The browser renders only validated HTTP(S) citation URLs, and usage
@@ -90,7 +96,12 @@ reports web search actions separately from model tokens.
 
 The only asynchronous specialist is `researcher`. Final synthesis and report
 writing stay with the main graph so evidence and conclusions share one
-authoritative context.
+authoritative context. The researcher returns structured evidence and
+limitations; it does not create user-facing artifacts or persist memory.
+Async collection forwards only that structured contract plus task and trace
+identifiers, never the researcher's reasoning or message history. SEC monetary
+facts include deterministic USD scale conversions, while Massive bars echo the
+adjustment flag, market timezone, observed dates and reproducible request URL.
 
 ## Assets and Daytona
 
