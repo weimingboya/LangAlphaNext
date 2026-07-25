@@ -1,103 +1,175 @@
 # LangAlpha Next
 
-LangAlpha Next is a clean-room rewrite on the Deep Agents stack. It has one
-agent experience rather than separate Flash/PTC modes.
+LangAlpha is a production-oriented Deep Agents application:
 
-The implementation uses:
+- LangGraph Agent Server owns Threads, Runs, checkpoints and native steering;
+- Daytona provides isolated, disposable computation;
+- Supabase Auth identifies users;
+- Supabase Postgres and private Storage persist Assets;
+- LangSmith provides tracing and evaluation;
+- React and Vite provide the product UI;
+- FastAPI serves the product API and built UI on Vercel.
 
-- Deep Agents as the only agent harness;
-- LangGraph Agent Server for thread, run, checkpoint, cancellation, and stream state;
-- OpenAI `gpt-5.6-luna` through the Responses API;
-- Daytona as the only Python, shell, and workspace sandbox;
-- host-side MCP tools through `langchain-mcp-adapters`;
-- a thin FastAPI BFF that proxies Agent Server resources and streams;
-- a responsive local research UI served by the control plane.
+There is no local product database and no custom guidance state machine.
 
 ## Local development
 
-Requirements: Python 3.12+, `uv`, an OpenAI API key, and a Daytona API key.
-LangSmith tracing is verified additionally when `LANGSMITH_API_KEY` is set.
+Requirements: Python 3.12+, Node.js 24, `uv`, Docker Desktop, the Supabase CLI, and the
+non-Supabase values documented in [.env.example](.env.example).
 
 ```bash
 cp .env.example .env
-# Fill keys locally. The file is ignored by Git.
 make sync
-make agent
+make dev
 ```
 
-In another terminal:
+`make dev` starts an isolated local Supabase stack, applies the committed
+migration, then starts Vite, the local LangGraph Agent Server and FastAPI BFF.
+It does not reuse another project's users, database, or Storage.
+
+```text
+React Web:       http://127.0.0.1:5173
+FastAPI BFF:     http://127.0.0.1:8000
+LangGraph API:   http://127.0.0.1:2024
+Supabase API:    http://127.0.0.1:55321
+Supabase Studio: http://127.0.0.1:55323
+Local email:     http://127.0.0.1:55324
+```
+
+For separate terminals:
 
 ```bash
+make local-up
+make agent
 make api
+make web
 ```
 
-Open:
+Use `make local-reset` to rebuild the local database from the single baseline
+migration and `make local-down` to stop the LangAlpha Supabase containers.
 
-- product UI: `http://127.0.0.1:8000`
-- API docs: `http://127.0.0.1:8000/docs`
-- Agent Server: `http://127.0.0.1:2024`
-- LangGraph Studio: the URL printed by `make agent`
+## Supabase setup
 
-`make agent` disables file watching because the local SQLite database and
-stream checkpoints otherwise cause continuous development reloads. Restart the
-command after changing graph code.
+Create a dedicated LangAlpha Supabase project and apply:
 
-## Workspace behavior
+```text
+supabase/migrations/20260725000100_create_assets.sql
+```
 
-A new thread does not create a Daytona sandbox and has no initial business
-files. Daytona is resolved only when an agent executes code, reads/writes a
-workspace file, materializes a dataset, or a user uploads a file.
+The migration creates the private `assets` registry and private
+`langalpha-assets` bucket. Browser users cannot query the table. The BFF and
+Agent host use `SUPABASE_SECRET_KEY`; the UI receives only
+`SUPABASE_PUBLISHABLE_KEY`.
 
-Product-owned skills and memory are mounted read-only from the application
-package at `/skills` and `/memory`; they are not copied into the user workspace.
-Cross-thread user memory and workspace-scoped memory use the managed LangGraph
-Store through `/memories/user` and `/memories/workspace`.
+For the external production-boundary test, set
+`SUPABASE_TEST_ACCESS_TOKEN` to a short-lived token for a disposable test user.
 
-MCP tools run in the Agent Server host process. Their schemas are exposed to the
-model, while credentials never enter Daytona. Large results can be materialized
-under `/workspace/input/<logical_operation_id>` and analyzed with ordinary
-Python. Prefer `source_tool_call_id` so large Tool results are read from the
-existing ToolMessage rather than copied through another model call. Python does
-not call MCP directly. User-visible outputs belong under `/workspace/artifacts`.
+## Vercel deployment
 
-The product UI supports resumable run progress, snapshot recovery, artifacts, HITL
-Ask/Plan cards, guidance, cancellation, structured data widgets, native SVG
-bar/line charts, and token usage. Cost is shown only when explicit input/output
-rates are configured.
+Configure these Production environment variables:
 
-Agent Server is the only durable runtime authority. Live SSE directly proxies
-its resumable per-run stream. Reload uses Agent Server thread state/run history
-plus the Daytona artifact manifest; SQLite contains no run or event mirror.
+```text
+LANGGRAPH_SERVER_URL
+LANGGRAPH_API_KEY
+LANGGRAPH_ASSISTANT_ID
+SUPABASE_URL
+SUPABASE_PUBLISHABLE_KEY
+SUPABASE_SECRET_KEY
+SUPABASE_STORAGE_BUCKET
+APP_PROJECT_ID
+APP_VERSION
+APP_ENVIRONMENT=production
+OPENAI_API_KEY
+OPENAI_WEB_SEARCH_CONTEXT_SIZE
+OPENAI_WEB_SEARCH_MAX_CALLS
+SEC_USER_AGENT
+FRED_API_KEY
+MASSIVE_API_KEY
+DAYTONA_API_KEY
+LANGSMITH_API_KEY
+LANGSMITH_PROJECT
+```
 
-## Quality checks
+The Vercel BFF uses `LANGGRAPH_API_KEY` to authenticate to the protected Agent
+Server. The Agent Server deployment needs the OpenAI, Daytona, Supabase,
+LangSmith and application identity values as well. `SEC_USER_AGENT` must identify the
+organization and a contact email. FRED and Massive keys stay on the Agent
+Server host. Vercel does not run the LangGraph Agent Server.
+
+`vercel.json` builds the React application into Vercel's `public` output,
+packages the FastAPI streaming BFF separately, and gives that function the
+Hobby-plan maximum 300-second ceiling. Local `.env`, test, design and
+service-state files are explicitly excluded from the deployment artifact.
+Runs continue on the Agent Server when a client reconnects.
+`/health` is the process liveness endpoint; `/ready` additionally rejects
+missing production dependencies and loopback Agent Server URLs.
+
+## CI/CD
+
+`.github/workflows/ci.yml` runs lint, unit tests, LangGraph config validation,
+and a clean local Supabase migration rebuild on every push and pull request.
+
+`.github/workflows/deploy.yml` runs on `main` and deploys in this order:
+
+1. apply pending migrations to the linked Supabase project;
+2. build/update the LangGraph production deployment;
+3. build and deploy the prebuilt Vercel artifact;
+4. verify `/health` and `/ready`.
+
+Configure the GitHub `production` environment with:
+
+```text
+Variables:
+SUPABASE_PROJECT_ID
+SUPABASE_URL
+VERCEL_ORG_ID
+VERCEL_PROJECT_ID
+
+Required secrets:
+SUPABASE_ACCESS_TOKEN
+SUPABASE_DB_PASSWORD
+SUPABASE_PUBLISHABLE_KEY
+SUPABASE_SECRET_KEY
+LANGSMITH_API_KEY
+OPENAI_API_KEY
+DAYTONA_API_KEY
+VERCEL_TOKEN
+
+Optional capability secrets:
+SEC_USER_AGENT
+FRED_API_KEY
+MASSIVE_API_KEY
+```
+
+## Runtime behavior
+
+Selected inputs are hydrated from private Storage to:
+
+```text
+/workspace/input/assets/{asset_id}/{filename}
+```
+
+User-visible outputs belong under `/workspace/artifacts`. After a write, the
+Agent host persists the file to Supabase before emitting `asset.ready`.
+
+New messages use LangGraph native `enqueue`. During an active run, an empty
+composer exposes cancel on the primary button, while a typed follow-up uses
+`interrupt`. The first question becomes the thread title, and thread deletion
+also removes its stored assets and sandbox. HITL uses checkpoint resume. Daytona stops after one idle hour,
+archives after seven days and deletes after 30 days.
+
+## Quality gates
 
 ```bash
 make lint
 make test
 ```
 
-`make test` runs both the Python contract/golden suite and the browser
-transient Agent Event reducer tests.
-
-After exporting real credentials in the local shell, run the paid provider
-gates separately:
+Paid external checks:
 
 ```bash
 make external-test
 ```
 
-This verifies the configured OpenAI model plus Daytona create, execute,
-blocked-egress, upload/download, stop/start, archive/restore checksum, and
-cleanup lifecycle. It also runs the complete local two-service vertical slice:
-upload → finance tool → dataset materialization → Daytona Python → report and
-widget → async researcher → Agent Server state/snapshot checks, plus a real
-Ask User interrupt/resume cycle. When a LangSmith key is configured, it also
-queries the isolated LangSmith project through the LangSmith CLI to prove that
-the real trace tree is available. It never runs as part of the normal unit
-suite.
-
 See [architecture.md](docs/architecture.md) and
-[event-contract.md](docs/event-contract.md) for the runtime contract. Current
-external-service verification status is recorded in
-[spike-report.md](docs/architecture/spike-report.md), with the requirement-level
-completion state in [completion-audit.md](docs/completion-audit.md).
+[event-contract.md](docs/event-contract.md).

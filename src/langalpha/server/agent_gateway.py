@@ -7,7 +7,14 @@ from typing import Any
 
 from langgraph_sdk import get_client
 
-from langalpha.domain.models import AgentEvent, RunStatus, RunView, UsageSummary
+from langalpha.domain.models import (
+    AgentEvent,
+    RunStatus,
+    RunStrategy,
+    RunView,
+    ThreadView,
+    UsageSummary,
+)
 from langalpha.security.redaction import redact_text, redact_value
 
 _REMOTE_STATUS: dict[str, RunStatus] = {
@@ -62,7 +69,7 @@ def _has_successor(remotes: list[object], run_id: str) -> bool:
 def run_view(
     remote: object,
     *,
-    product_thread_id: str,
+    thread_id: str,
     has_checkpoint_interrupt: bool = False,
 ) -> RunView:
     value = as_dict(remote)
@@ -80,12 +87,28 @@ def run_view(
         error = redact_text(str(value.get("error") or "Agent Server run failed"))
     return RunView(
         id=run_id,
-        thread_id=product_thread_id,
-        control_id=str(metadata.get("product_run_id") or run_id),
+        thread_id=thread_id,
         turn_id=str(metadata.get("turn_id") or run_id),
         parent_run_id=(str(metadata["parent_run_id"]) if metadata.get("parent_run_id") else None),
         status=status,
         error=error,
+        created_at=created_at,
+        updated_at=_datetime(value.get("updated_at"), created_at),
+    )
+
+
+def thread_view(remote: object) -> ThreadView:
+    value = as_dict(remote)
+    thread_id = str(value.get("thread_id") or value.get("id") or "")
+    if not thread_id:
+        raise ValueError("Agent Server thread has no thread_id")
+    metadata = value.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    created_at = _datetime(value.get("created_at"))
+    return ThreadView(
+        id=thread_id,
+        title=str(metadata.get("title") or "New research"),
+        metadata=redact_value(metadata),
         created_at=created_at,
         updated_at=_datetime(value.get("updated_at"), created_at),
     )
@@ -167,7 +190,31 @@ def summarize_usage(
     output_tokens = 0
     total_tokens = 0
     cached_input_tokens = 0
+    web_search_calls = 0
+    seen_web_search_calls: set[str] = set()
+
+    def collect_web_search_calls(value: Any) -> None:
+        nonlocal web_search_calls
+        if isinstance(value, dict):
+            if value.get("type") == "web_search_call":
+                action = value.get("action")
+                if not isinstance(action, dict) or action.get("type") in {None, "search"}:
+                    identifier = value.get("id") or value.get("call_id")
+                    if identifier:
+                        normalized = str(identifier)
+                        if normalized not in seen_web_search_calls:
+                            seen_web_search_calls.add(normalized)
+                            web_search_calls += 1
+                    else:
+                        web_search_calls += 1
+            for nested in value.values():
+                collect_web_search_calls(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                collect_web_search_calls(nested)
+
     for message in messages:
+        collect_web_search_calls(message.get("content"))
         usage = _usage(message)
         if usage is None:
             continue
@@ -199,6 +246,7 @@ def summarize_usage(
         output_tokens=output_tokens,
         total_tokens=total_tokens,
         cached_input_tokens=cached_input_tokens,
+        web_search_calls=web_search_calls,
         estimated_cost_usd=estimated_cost,
     )
 
@@ -206,7 +254,7 @@ def summarize_usage(
 def normalize_stream_part(
     part: object,
     *,
-    product_thread_id: str,
+    thread_id: str,
     graph_run_id: str,
 ) -> AgentEvent:
     raw_name = str(getattr(part, "event", "unknown"))
@@ -220,9 +268,9 @@ def normalize_stream_part(
     elif raw_name.startswith("custom"):
         custom_type = payload.get("type")
         event_type = {
-            "artifact.changed": "artifact.updated",
+            "asset.ready": "asset.ready",
+            "asset.failed": "asset.failed",
             "sandbox.bound": "sandbox.bound",
-            "steering.delivered": "steering.delivered",
             "widget.ready": "widget.ready",
         }.get(str(custom_type), "agent.custom")
     elif raw_name.startswith("metadata"):
@@ -235,7 +283,7 @@ def normalize_stream_part(
     event_id = str(part_id or f"volatile:{graph_run_id}:{_stable_id([raw_name, payload])}")
     return AgentEvent(
         id=event_id,
-        thread_id=product_thread_id,
+        thread_id=thread_id,
         run_id=graph_run_id,
         type=event_type,
         payload=payload,
@@ -245,39 +293,81 @@ def normalize_stream_part(
 class AgentGateway:
     """Thin adapter around the official Agent Server SDK resource clients."""
 
-    def __init__(self, server_url: str) -> None:
-        self.client = get_client(url=server_url)
+    def __init__(self, server_url: str, *, api_key: str | None = None) -> None:
+        self.client = get_client(url=server_url, api_key=api_key)
 
-    async def state(self, graph_thread_id: str) -> dict[str, Any]:
-        return as_dict(await self.client.threads.get_state(graph_thread_id))
+    async def create_thread(
+        self,
+        *,
+        metadata: dict[str, Any],
+        thread_id: str | None = None,
+    ) -> ThreadView:
+        remote = await self.client.threads.create(metadata=metadata, thread_id=thread_id)
+        return thread_view(remote)
+
+    async def search_threads(
+        self,
+        *,
+        metadata: dict[str, Any],
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[ThreadView]:
+        remotes = await self.client.threads.search(
+            metadata=metadata,
+            limit=limit,
+            offset=offset,
+            sort_by="updated_at",
+            sort_order="desc",
+        )
+        return [thread_view(remote) for remote in remotes]
+
+    async def get_thread(self, thread_id: str) -> ThreadView:
+        return thread_view(await self.client.threads.get(thread_id))
+
+    async def update_thread_metadata(
+        self,
+        thread_id: str,
+        updates: dict[str, Any],
+    ) -> ThreadView:
+        current = await self.get_thread(thread_id)
+        remote = await self.client.threads.update(
+            thread_id,
+            metadata={**current.metadata, **updates},
+        )
+        if remote is None:
+            return await self.get_thread(thread_id)
+        return thread_view(remote)
+
+    async def delete_thread(self, thread_id: str) -> None:
+        await self.client.threads.delete(thread_id)
+
+    async def state(self, thread_id: str) -> dict[str, Any]:
+        return as_dict(await self.client.threads.get_state(thread_id))
 
     async def run(
         self,
-        graph_thread_id: str,
-        graph_run_id: str,
-        *,
-        product_thread_id: str,
+        thread_id: str,
+        run_id: str,
     ) -> RunView:
-        remote = await self.client.runs.get(graph_thread_id, graph_run_id)
-        state = await self.state(graph_thread_id)
-        remotes = await self.client.runs.list(graph_thread_id, limit=100)
+        remote = await self.client.runs.get(thread_id, run_id)
+        state = await self.state(thread_id)
+        remotes = await self.client.runs.list(thread_id, limit=100)
         return run_view(
             remote,
-            product_thread_id=product_thread_id,
+            thread_id=thread_id,
             has_checkpoint_interrupt=(
-                bool(state_interrupts(state)) or _has_successor(remotes, graph_run_id)
+                bool(state_interrupts(state)) or _has_successor(remotes, run_id)
             ),
         )
 
     async def runs(
         self,
-        graph_thread_id: str,
+        thread_id: str,
         *,
-        product_thread_id: str,
         limit: int = 100,
     ) -> list[RunView]:
-        remotes = await self.client.runs.list(graph_thread_id, limit=limit)
-        state = await self.state(graph_thread_id)
+        remotes = await self.client.runs.list(thread_id, limit=limit)
+        state = await self.state(thread_id)
         interrupts = bool(state_interrupts(state))
         result: list[RunView] = []
         for index, remote in enumerate(remotes):
@@ -285,7 +375,7 @@ class AgentGateway:
             result.append(
                 run_view(
                     remote,
-                    product_thread_id=product_thread_id,
+                    thread_id=thread_id,
                     has_checkpoint_interrupt=(
                         (interrupts and index == 0)
                         or (bool(remote_id) and _has_successor(remotes, remote_id))
@@ -296,15 +386,17 @@ class AgentGateway:
 
     async def create(
         self,
-        graph_thread_id: str,
+        thread_id: str,
         assistant_id: str,
+        *,
+        strategy: RunStrategy = "enqueue",
         **kwargs: Any,
     ) -> dict[str, Any]:
         return as_dict(
             await self.client.runs.create(
-                graph_thread_id,
+                thread_id,
                 assistant_id,
-                multitask_strategy="reject",
+                multitask_strategy=strategy,
                 stream_mode=["messages", "updates", "custom"],
                 stream_subgraphs=True,
                 stream_resumable=True,
@@ -312,10 +404,10 @@ class AgentGateway:
             )
         )
 
-    async def cancel(self, graph_thread_id: str, graph_run_id: str) -> None:
+    async def cancel(self, thread_id: str, run_id: str) -> None:
         await self.client.runs.cancel(
-            graph_thread_id,
-            graph_run_id,
+            thread_id,
+            run_id,
             wait=True,
             action="interrupt",
         )

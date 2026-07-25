@@ -1,0 +1,11 @@
+.env*
+.venv/
+.data/
+.langgraph_api/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+tests/
+docs/
+build/
+supabase/.temp/

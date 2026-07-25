@@ -1,78 +1,64 @@
 # Agent Event and snapshot contract
 
-LangAlpha does not maintain a second durable runtime event log. Agent Server is
-the source of truth for runs, checkpoints, messages, interrupts, history, and
-resumable stream cursors.
+Agent Server owns durable runtime state and resumable cursors. The BFF does not
+store an event log.
 
 ## Live stream
 
-The browser follows one Agent Server run through the BFF:
-
 ```http
-GET /api/threads/{product_thread_id}/runs/{graph_run_id}/stream
+GET /api/threads/{thread_id}/runs/{run_id}/stream
+Authorization: Bearer <supabase-access-token>
 Last-Event-ID: <agent-server-event-id>
 ```
 
 The BFF calls `runs.join_stream(cancel_on_disconnect=False,
-last_event_id=...)`, redacts the payload, and returns a transient envelope:
+last_event_id=...)`, redacts the payload and emits:
 
 ```json
 {
   "id": "agent-server-event-id",
-  "thread_id": "product-thread-id",
-  "run_id": "agent-server-run-id",
+  "thread_id": "langgraph-thread-id",
+  "run_id": "langgraph-run-id",
   "type": "message.completed",
   "payload": {},
-  "created_at": "2026-07-24T00:00:00Z"
+  "created_at": "2026-07-25T00:00:00Z"
 }
 ```
 
-`id` is the Agent Server cursor when one is available. A content-derived
-`volatile:*` ID is used only for upstream frames without IDs and is not a
-durability guarantee. The BFF emits one synthetic
-`terminal:<run_id>:<status>` frame after reconciling the run and thread state.
-
-Stable UI event types are:
+Stable product types are:
 
 - `message.delta`, `message.completed`
 - `state.updated`, `agent.custom`, `agent.metadata`
-- `sandbox.bound`, `artifact.updated`, `widget.ready`
-- `interrupt.requested`, `steering.delivered`
+- `sandbox.bound`, `asset.ready`, `asset.failed`, `widget.ready`
+- `interrupt.requested`
 - `run.success`, `run.error`, `run.interrupted`, `run.cancelled`
 
-The browser reducer preserves arrival order and ignores duplicate IDs. It does
-not invent a local sequence, replay cursor, or durable source key.
+An upstream frame without an ID receives a content-derived `volatile:*` ID.
+After the upstream stream ends, the BFF emits
+`terminal:<run_id>:<status>`. The browser preserves arrival order and
+deduplicates IDs; it does not invent a durable cursor.
 
-## Reload and recovery
+`asset.ready` is emitted only after Storage upload and Asset-row persistence
+succeed. `sandbox.bound` is informational: the Agent host itself persists the
+binding to Thread metadata.
 
-Reload does not replay BFF events. It calls:
+## Reload
 
 ```http
-GET /api/threads/{product_thread_id}/snapshot
+GET /api/threads/{thread_id}/snapshot
 ```
 
-The response is assembled from:
+The snapshot combines:
 
-- Agent Server `threads.get_state` for messages, todos, and interrupts;
-- Agent Server `runs.list` for run history and current status;
-- `show_widget` ToolMessages for structured widgets;
-- AI message usage metadata for token/cost totals;
-- the product artifact index reconciled against the bound Daytona workspace.
+- Agent Server state for messages, todos and checkpoint interrupts;
+- Agent Server run history and native status;
+- `show_widget` ToolMessages;
+- AI message usage metadata;
+- OpenAI `web_search_call` actions, counted separately from model tokens;
+- ready/uploading/failed Supabase Assets for the Thread.
 
-HITL is distinguished from cancellation using native semantics:
+It never scans Daytona to reconstruct durable product state.
 
-- a successful Agent Server run with checkpoint interrupts is product
-  `interrupted`;
-- an Agent Server run whose status is `interrupted` after explicit cancel is
-  product `cancelled`;
-- a historical run with a successor whose `parent_run_id` points to it remains
-  product `interrupted` after the checkpoint is resumed.
-
-## Product-owned side effects
-
-Only two live custom events update the product database:
-
-- `sandbox.bound` records the stable Daytona binding;
-- `artifact.changed` upserts product-facing artifact metadata.
-
-These are product resources, not a mirror of Agent Server runtime state.
+Responses API text annotations are projected as inline citations. The browser
+accepts only `http:` and `https:` URLs and opens them with
+`noopener noreferrer`; tool payloads and reasoning blocks remain hidden.

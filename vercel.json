@@ -1,0 +1,14 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "fastapi",
+  "installCommand": "npm --prefix web ci && npm --prefix web run build",
+  "buildCommand": "true",
+  "regions": ["sin1"],
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 300,
+      "includeFiles": "src/**",
+      "excludeFiles": "{.env*,.github/**,.langgraph_api/**,.pytest_cache/**,.data/**,tests/**,docs/**,dist/**,scripts/**,supabase/**,web/src/**,web/*.json,web/index.html,src/langalpha/server/static/**,*.tsbuildinfo}"
+    }
+  }
+}

@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install web dependencies
+        run: npm --prefix web ci
+
+      - name: Install Python and dependencies
+        run: |
+          uv python install 3.12
+          uv sync --frozen --all-groups
+
+      - name: Lint and unit tests
+        run: |
+          make lint
+          make test
+          npm --prefix web run build
+          uv run langgraph validate
+
+      - uses: supabase/setup-cli@v2
+        with:
+          version: 2.109.1
+
+      - name: Rebuild the local database from migrations
+        run: |
+          supabase db start
+          supabase db reset --local
+
+      - name: Verify the database baseline
+        run: |
+          supabase db query --local "
+            select
+              to_regclass('public.assets') is not null as assets_exists,
+              exists (
+                select 1
+                from storage.buckets
+                where id = 'langalpha-assets' and public = false
+              ) as private_bucket_exists;
+          "
+
+      - name: Stop local Supabase
+        if: always()
+        run: supabase stop --no-backup

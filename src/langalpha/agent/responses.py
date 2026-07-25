@@ -15,10 +15,3 @@ class ResearchResult(BaseModel):
     dataset_paths: list[str] = Field(default_factory=list)
     artifact_paths: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
-
-
-class ReportResult(BaseModel):
-    title: str = Field(min_length=1)
-    executive_summary: str = Field(min_length=1)
-    artifact_paths: list[str] = Field(default_factory=list)
-    source_count: int = Field(ge=0)

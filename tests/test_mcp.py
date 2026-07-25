@@ -19,10 +19,8 @@ async def test_mcp_gateway_enforces_context_budget_and_redaction(monkeypatch) ->
     context = RunContext(
         project_id="project",
         owner_id="owner",
-        workspace_id="workspace",
-        product_thread_id="thread",
+        thread_id="thread",
         turn_id="turn",
-        product_run_id="run",
     )
     request = MCPToolCallRequest(
         name="quote",

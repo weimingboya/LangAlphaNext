@@ -330,7 +330,7 @@ def show_widget(
 
     context = _require_context(runtime)
     widget = {
-        "id": f"{context.product_run_id}:{runtime.tool_call_id}",
+        "id": f"{context.turn_id}:{runtime.tool_call_id}",
         "kind": kind,
         "title": title,
         "description": description,

@@ -15,7 +15,26 @@ class CapabilityGateway:
         self._calls: OrderedDict[tuple[str, str], int] = OrderedDict()
 
     def admit(self, capability_id: str, context: RunContext) -> None:
-        key = (context.product_run_id, capability_id)
+        self.admit_scope(capability_id, context.turn_id)
+
+    def admit_runtime(self, capability_id: str, runtime: object) -> None:
+        """Admit a public capability from a main or isolated subagent run."""
+
+        context = getattr(runtime, "context", None)
+        if isinstance(context, RunContext):
+            scope = context.turn_id
+        else:
+            config = getattr(runtime, "config", None)
+            configurable = config.get("configurable", {}) if isinstance(config, dict) else {}
+            scope = str(
+                configurable.get("thread_id")
+                or getattr(runtime, "tool_call_id", None)
+                or "anonymous"
+            )
+        self.admit_scope(capability_id, scope)
+
+    def admit_scope(self, capability_id: str, scope: str) -> None:
+        key = (scope, capability_id)
         with self._lock:
             count = self._calls.get(key, 0) + 1
             self._calls[key] = count

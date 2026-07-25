@@ -59,7 +59,7 @@ class MCPGatewayInterceptor:
         runtime_context = getattr(request.runtime, "context", None)
         if not isinstance(runtime_context, RunContext):
             return _error_result("MCP capability requires a server-issued RunContext")
-        if not self._consume_budget(runtime_context.product_run_id):
+        if not self._consume_budget(runtime_context.turn_id):
             return _error_result("MCP call budget exceeded for this run")
 
         try:

@@ -1,88 +1,128 @@
 # LangAlpha Next architecture
 
-## Runtime ownership
+## Ownership
 
-LangAlpha has one Deep Agents experience:
+LangAlpha has one Deep Agents harness and five explicit infrastructure owners:
 
-- `main` owns the user-facing turn and asynchronous delegation;
-- `researcher` performs evidence and computation work;
-- `reporter` produces verified deliverables.
+| State or capability | Owner |
+|---|---|
+| Thread, run, checkpoint, message, interrupt, queue | LangGraph Agent Server |
+| User identity and access token | Supabase Auth |
+| Asset registry and durable file bytes | Supabase Postgres + private Storage |
+| Ephemeral computation and working files | Daytona |
+| Traces and evaluations | LangSmith |
+| Product API, authorization checks and UI | FastAPI on Vercel |
 
-`DeepAgentFactory` is the only place that calls `create_deep_agent`.
+There is no SQLite product database, Thread mirror, runtime binding table, Run
+mirror, guidance queue or event outbox.
 
-LangGraph Agent Server is the unique runtime system of record. It owns
-assistants, threads, runs, checkpoints, messages, todos, interrupts,
-cancellation, history, Store data, and resumable stream cursors. Production
-uses LangSmith Deployment.
+The public Thread ID is the LangGraph `thread_id`. Thread metadata contains the
+server-written `owner_id`, `project_id`, `title`, `schema_version` and optional
+`sandbox_id`. Every operation reads that metadata and checks the authenticated
+Supabase user before accessing the Thread.
 
-FastAPI is a thin product BFF. It owns only:
+## Repository boundaries
 
-- the product-thread to Agent Server-thread mapping;
-- server-issued project, owner, workspace, and assistant bindings;
-- the stable Daytona sandbox binding;
-- user uploads and product-facing artifact metadata;
-- short-lived user guidance consumed by agent middleware;
-- UI snapshot shaping, redaction, and stream proxying.
+```text
+api/                         Vercel FastAPI function entrypoint
+src/langalpha/
+  agent/                     LangGraph and Deep Agents assembly
+  assets/                    durable Asset persistence
+  backends/                  Daytona and memory backends
+  capabilities/              host-side research tools
+  integrations/              external protocol adapters
+  security/                  redaction and trust boundaries
+  server/
+    routes/                  FastAPI system, Thread, Run and Asset APIs
+    dependencies.py          request-scoped authorization and services
+    main.py                  application assembly only
+supabase/                    one reproducible database baseline
+web/                         complete React/Vite application root
+  src/
+    domain/                  pure event and product models
+    features/                auth, assets, research and Thread UI
+    shared/                  reusable API and UI primitives
+    styles/                  application styles
+tests/                       Python unit and contract tests
+```
 
-SQLite deliberately has only `product_threads`, `runtime_bindings`, `artifacts`,
-and `guidance`. It has no run, checkpoint, message, event, cursor, terminal, or
-Outbox table. Old runtime projection databases are rejected instead of
-silently treated as compatible.
+The repository remains a single deployable product. Python and web dependency
+roots are separate, but there is no workspace tool or monorepo layer because
+there is only one frontend and one BFF.
 
-## Request flow
+Python tests remain flat while the suite is small. Paid provider and full-stack
+gates stay isolated in `tests/external/`; small frontend domain tests remain
+co-located with their TypeScript modules.
 
-For a new turn the BFF creates an Agent Server run with:
+## Run flow
 
-- `multitask_strategy="reject"` for concurrency ownership;
-- `stream_resumable=True`;
-- `messages`, `updates`, and `custom` stream modes;
-- an immutable server-issued `RunContext`;
-- metadata containing product thread, control, and turn IDs.
+The BFF creates Agent Server runs with:
 
-The public run ID is the Agent Server run ID. The separate control ID exists
-only so `TurnSteeringMiddleware` can claim guidance without trusting browser
-identity.
+- native `multitask_strategy="enqueue"|"interrupt"`;
+- resumable `messages`, `updates` and `custom` streams;
+- server-written trace metadata (`owner_id`, `project_id`, `thread_id`,
+  `turn_id`, version and environment);
+- a `RunContext` containing only trusted identity, Thread, turn, input Asset IDs
+  and the expected Daytona sandbox.
 
-The UI consumes a per-run SSE proxy over `join_stream`. The BFF stores no cursor
-and does no background stream following. On reload, one snapshot is rebuilt
-from Agent Server state/runs and Daytona artifact metadata. See
-[event-contract.md](event-contract.md).
+HITL uses native LangGraph checkpoint interrupts and `Command(resume=...)`.
+Cancellation delegates to Agent Server. There is no custom steering middleware.
 
-Resume creates a successor Agent Server run with `command={"resume": value}`
-and `parent_run_id` metadata. Cancel delegates directly to
-`runs.cancel(action="interrupt")`. No compatibility routes or local run state
-machine exist.
+The UI follows `runs.join_stream` through an authenticated SSE proxy. Reload
+builds one snapshot from Agent Server state and run history plus the Supabase
+Asset registry.
 
-## Deep Agents, MCP, and Daytona
+## Research capabilities
 
-The implementation directly reuses Deep Agents for planning, filesystem tools,
-shell/Python execution, summarization, subagents, skills, memory, permissions,
-and model/tool limits.
+OpenAI Responses web search is the only general-web provider. The main graph
+and isolated researcher graph receive it as a provider-hosted tool, so search
+actions and URL annotations remain native Responses content. The main graph
+also owns fixed host-side tools for:
 
-The context-aware `CompositeBackend` routes:
+- SEC company resolution, filing lists, primary filing text and XBRL facts;
+- FRED series discovery and observations;
+- Massive instrument resolution, snapshots, aggregate bars and corporate actions.
 
-- default workspace operations to lazy `ContextDaytonaSandbox`;
-- `/skills/` and `/memory/` to packaged read-only resources;
-- `/memories/user/` and `/memories/workspace/` to LangGraph Store;
-- `/memos/` to a read-only Store namespace.
+There is no provider fallback in this phase. A failed primary provider remains
+visible rather than being silently replaced by a source with different
+semantics. The browser renders only validated HTTP(S) citation URLs, and usage
+reports web search actions separately from model tokens.
 
-There is no `WorkspaceSeeder` or generic initial-file injection. Daytona is
-created only when a workspace operation or upload requires it.
+The only asynchronous specialist is `researcher`. Final synthesis and report
+writing stay with the main graph so evidence and conclusions share one
+authoritative context.
 
-MCP servers and credentials remain in the Agent Server host. The model sees MCP
-tool schemas and calls host tools. Large results are materialized under
-`/workspace/input/<logical_operation_id>` and ordinary Daytona Python reads
-those files for computation. Python inside Daytona does not call MCP directly.
-User-visible outputs belong under `/workspace/artifacts`.
+## Assets and Daytona
 
-## Deployment and limits
+The `assets` table is the only product persistence table. Input bytes and
+generated artifacts live in the private `langalpha-assets` bucket under:
 
-Local development runs Agent Server on port 2024 and the BFF on port 8000.
-Production points `LANGGRAPH_SERVER_URL` at LangSmith Deployment configured by
-`langgraph.json`. LangSmith is the only tracing system.
+```text
+{owner_id}/{thread_id}/{asset_id}/{sha256}/{filename}
+```
 
-The simplified research defaults are 40 model calls, 150 tool calls, three
-async task starts, 20 minutes per run, 25 MiB uploads, Daytona auto-stop after
-60 idle minutes, and auto-archive after seven days. Estimated cost is shown
-only when both model rates are configured; it is derived from Agent Server
-message state and is not persisted locally.
+Small browser files use signed direct uploads. Files over 6 MiB use Supabase
+TUS with 6 MiB chunks. Daytona hydrates selected inputs into
+`/workspace/input/assets/{asset_id}/{filename}` when first needed.
+
+User-visible outputs are written to `/workspace/artifacts`. The Agent host
+downloads each changed output from Daytona, uploads an immutable Supabase
+object, atomically updates the Asset row, and only then emits `asset.ready`.
+Daytona is therefore disposable rather than permanent storage.
+
+Sandbox resolution is deterministic by `thread_id` labels. The Agent host
+persists `sandbox_id` directly to LangGraph Thread metadata; it does not depend
+on a browser stream being connected. Label mismatches fail closed.
+
+## Deployment
+
+Vercel builds the React + TypeScript + Vite UI into its `public` static output
+and packages the FastAPI BFF as a separate function. `LANGGRAPH_SERVER_URL`
+points to the deployed LangGraph Agent Server. Supabase migrations provision
+the private Asset registry and bucket. Server secrets exist only in Vercel and
+the Agent Server host.
+
+Default Daytona lifecycle is stop after 60 idle minutes, archive after seven
+days and delete after 30 days. Thread deletion explicitly cancels active runs,
+deletes durable Assets, verifies and deletes its Daytona sandbox, then deletes
+the LangGraph Thread.

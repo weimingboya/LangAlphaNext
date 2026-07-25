@@ -16,6 +16,7 @@ def build_model() -> ChatOpenAI:
         },
         output_version="responses/v1",
         use_responses_api=True,
+        include=["web_search_call.action.sources"],
         stream_usage=True,
         timeout=120,
         # Retry ownership belongs to ModelRetryMiddleware in the factory.

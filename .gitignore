@@ -3,6 +3,7 @@
 .env.local
 .data/
 .langgraph_api/
+supabase/.temp/
 .pytest_cache/
 .ruff_cache/
 __pycache__/
@@ -11,4 +12,9 @@ dist/
 build/
 node_modules/
 web/dist/
+public/
+*.tsbuildinfo
 .DS_Store
+.vercel
+_uv/
+.env*

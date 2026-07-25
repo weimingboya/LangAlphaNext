@@ -19,30 +19,32 @@ from langalpha.agent.context import RunContext
 from langalpha.agent.model import build_model
 from langalpha.agent.prompts import (
     MAIN_SYSTEM_PROMPT,
-    REPORTER_SYSTEM_PROMPT,
     RESEARCHER_SYSTEM_PROMPT,
 )
-from langalpha.agent.responses import ReportResult, ResearchResult
+from langalpha.agent.responses import ResearchResult
 from langalpha.agent.state import LangAlphaAgentState
-from langalpha.agent.steering import TurnSteeringMiddleware
 from langalpha.agent.tools import HOST_TOOLS
 from langalpha.backends.daytona import get_context_daytona_backend
 from langalpha.capabilities.finance import FINANCE_TOOLS
+from langalpha.capabilities.macro import MACRO_TOOLS
+from langalpha.capabilities.openai_web import (
+    OpenAIWebSearchBudgetMiddleware,
+    build_openai_web_search_tool,
+)
+from langalpha.capabilities.sec import SEC_TOOLS
 from langalpha.config import get_settings
 from langalpha.integrations.mcp import load_mcp_tools
 
-Profile = Literal["main", "researcher", "reporter"]
+Profile = Literal["main", "researcher"]
 
 _PROMPTS = {
     "main": MAIN_SYSTEM_PROMPT,
     "researcher": RESEARCHER_SYSTEM_PROMPT,
-    "reporter": REPORTER_SYSTEM_PROMPT,
 }
 
 _RESPONSE_FORMATS = {
     "main": None,
     "researcher": ResearchResult,
-    "reporter": ReportResult,
 }
 
 FILESYSTEM_PERMISSIONS = (
@@ -67,10 +69,24 @@ class DeepAgentFactory:
         settings = get_settings()
         is_main = profile == "main"
         mcp_tools = list(load_mcp_tools()) if is_main else []
-        default_tools = [*HOST_TOOLS, *FINANCE_TOOLS, *mcp_tools] if is_main else []
+        web_search_tool = build_openai_web_search_tool()
+        default_tools = (
+            [
+                web_search_tool,
+                *HOST_TOOLS,
+                *FINANCE_TOOLS,
+                *SEC_TOOLS,
+                *MACRO_TOOLS,
+                *mcp_tools,
+            ]
+            if is_main
+            else [web_search_tool]
+        )
         selected_tools = list(tools if tools is not None else default_tools)
         retryable_tools = [
             *FINANCE_TOOLS,
+            *SEC_TOOLS,
+            *MACRO_TOOLS,
             *(
                 tool
                 for tool in mcp_tools
@@ -83,7 +99,6 @@ class DeepAgentFactory:
             if any(tool.name == name for tool in mcp_tools)
         ]
         middleware: list[Any] = [
-            TurnSteeringMiddleware(),
             ModelCallLimitMiddleware(
                 run_limit=settings.max_model_calls,
                 exit_behavior="end",
@@ -91,6 +106,9 @@ class DeepAgentFactory:
             ToolCallLimitMiddleware(
                 run_limit=settings.max_tool_calls,
                 exit_behavior="error",
+            ),
+            OpenAIWebSearchBudgetMiddleware(
+                max_calls=settings.openai_web_search_max_calls,
             ),
             ModelRetryMiddleware(
                 max_retries=3,
@@ -135,11 +153,6 @@ class DeepAgentFactory:
                     "name": "researcher",
                     "description": "并行完成证据检索、数据验证和可复现分析。",
                     "graph_id": "researcher",
-                },
-                {
-                    "name": "reporter",
-                    "description": "根据已有证据生成结构化报告和交付文件。",
-                    "graph_id": "reporter",
                 },
             ]
 

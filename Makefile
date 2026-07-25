@@ -1,20 +1,37 @@
-.PHONY: sync agent api dev test external-test lint
+.PHONY: sync local-up local-reset local-down agent api web web-build dev test external-test lint
 
 sync:
 	uv sync --all-groups
+	npm --prefix web ci
+
+local-up:
+	supabase start
+
+local-reset:
+	supabase db reset --local
+
+local-down:
+	supabase stop
 
 agent:
-	uv run langgraph dev --no-browser --no-reload --port 2024
+	./scripts/with-local-env.sh uv run langgraph dev --no-browser --no-reload --port 2024
 
 api:
-	uv run uvicorn langalpha.server.main:app --reload --port 8000
+	npm --prefix web run build
+	./scripts/with-local-env.sh uv run uvicorn langalpha.server.main:app --reload --port 8000
+
+web:
+	npm --prefix web run dev
+
+web-build:
+	npm --prefix web run build
 
 dev:
-	@echo "Run 'make agent' and 'make api' in separate terminals."
+	./scripts/dev-local.sh
 
 test:
 	uv run pytest -q
-	node --test tests/test_agent_events.mjs
+	npm --prefix web test
 
 external-test:
 	RUN_EXTERNAL_E2E=1 uv run --env-file .env pytest -q tests/external
@@ -22,5 +39,4 @@ external-test:
 lint:
 	uv run ruff check src tests
 	uv run ruff format --check src tests
-	node --check src/langalpha/server/static/app.js
-	node --check src/langalpha/server/static/agent-events.mjs
+	npm --prefix web run lint

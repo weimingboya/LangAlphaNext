@@ -15,7 +15,7 @@ def redact_text(value: str) -> str:
         settings.openai_api_key,
         settings.daytona_api_key,
         settings.langsmith_api_key,
-        settings.langalpha_internal_token,
+        settings.supabase_secret_key,
     ):
         if secret is not None:
             raw = secret.get_secret_value()

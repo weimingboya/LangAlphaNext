@@ -1,13 +1,13 @@
 {
-  "$schema": "https://langgra.ph/schema.json",
   "api_version": "0.10.3",
+  "python_version": "3.12",
+  "image_distro": "wolfi",
   "dependencies": [
     "."
   ],
   "graphs": {
     "main": "./src/langalpha/agent/graphs.py:main_graph",
-    "researcher": "./src/langalpha/agent/graphs.py:research_graph",
-    "reporter": "./src/langalpha/agent/graphs.py:report_graph"
+    "researcher": "./src/langalpha/agent/graphs.py:research_graph"
   },
   "env": ".env"
 }
