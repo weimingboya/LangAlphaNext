@@ -1,8 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "fastapi",
-  "installCommand": "npm --prefix web ci && npm --prefix web run build",
-  "buildCommand": "true",
+  "buildCommand": "npm --prefix web ci && npm --prefix web run build",
   "regions": ["sin1"],
   "functions": {
     "api/index.py": {

@@ -145,6 +145,18 @@ jobs:
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
       - name: Verify production readiness
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |
-          curl --fail --retry 5 --retry-all-errors "${{ steps.vercel.outputs.url }}/health"
-          curl --fail --retry 5 --retry-all-errors "${{ steps.vercel.outputs.url }}/ready"
+          vercel curl "${{ steps.vercel.outputs.url }}/health" \
+            --fail \
+            --silent \
+            --show-error \
+            --retry 5 \
+            --retry-all-errors
+          vercel curl "${{ steps.vercel.outputs.url }}/ready" \
+            --fail \
+            --silent \
+            --show-error \
+            --retry 5 \
+            --retry-all-errors
