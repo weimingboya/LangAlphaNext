@@ -1,8 +1,15 @@
-import { useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  lazy,
+  Suspense,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 
 import {
-  assistantMessageContent,
-  formatUsageSummary,
+  projectActivity,
   projectMessages,
 } from "../../domain/agent-events";
 import {
@@ -10,6 +17,7 @@ import {
   fileReferenceSegments,
 } from "../../domain/message-references";
 import type {
+  ActivityItem,
   AgentEvent,
   AgentProjection,
   Asset,
@@ -20,25 +28,7 @@ import type {
 } from "../../domain/types";
 import { WidgetCard } from "./WidgetCard";
 
-function eventText(event: AgentEvent): string {
-  if (["message.delta", "message.completed"].includes(event.type)) {
-    return assistantMessageContent(event.payload).text;
-  }
-  if (event.type === "run.error") {
-    return String(event.payload.message || event.payload.error || "Run failed");
-  }
-  if (event.type === "todo.updated") return "Research plan updated";
-  if (event.type === "sandbox.bound") return "Daytona workspace ready";
-  if (event.type === "asset.ready") {
-    return `File ready: ${String(event.payload.filename || "file")}`;
-  }
-  if (event.type === "widget.ready") {
-    const widget = event.payload.widget as JsonObject | undefined;
-    return `Widget ready: ${String(widget?.title || event.payload.title || "result")}`;
-  }
-  if (event.type === "usage.updated") return formatUsageSummary(event.payload);
-  return event.type.replaceAll(".", " ");
-}
+const MarkdownMessage = lazy(() => import("./MarkdownMessage"));
 
 function FriendlyText({
   assets,
@@ -88,10 +78,17 @@ function Activity({
   events: AgentEvent[];
   projection: AgentProjection;
 }) {
-  const latest = events.at(-1);
-  let label = latest ? eventText(latest) : projection.status.label;
+  const items = projectActivity(events);
+  const latest = items.at(-1);
+  const title =
+    projection.status.mode === "active"
+      ? "Researching"
+      : projection.status.mode === "error"
+        ? "Research failed"
+        : "Research complete";
+  let label = latest?.title || projection.status.label;
   if (projection.status.mode === "active") {
-    label = latest ? `Researching · ${eventText(latest)}` : "Researching…";
+    label = latest ? latest.title : "Working through the research plan";
   } else if (events.some((event) => event.type === "run.success")) {
     label = "Research complete";
   }
@@ -100,17 +97,46 @@ function Activity({
       className={`activity${projection.status.mode === "active" ? " running" : ""}${
         projection.status.mode === "error" ? " error" : ""
       }`}
+      open={projection.status.mode === "active" ? true : undefined}
     >
-      <summary>{label}</summary>
-      <ul className="activity-events">
-        {events
-          .slice(-8)
-          .reverse()
-          .map((event) => (
-            <li key={event.id}>{eventText(event)}</li>
+      <summary>
+        <span className="activity-summary-copy">
+          <strong>{title}</strong>
+          <span>{label}</span>
+        </span>
+        {items.length ? (
+          <span className="activity-count">
+            {items.length} {items.length === 1 ? "step" : "steps"}
+          </span>
+        ) : null}
+      </summary>
+      {items.length ? (
+        <ol className="activity-events">
+          {items.slice(-16).map((item) => (
+            <ActivityRow item={item} key={item.id} />
           ))}
-      </ul>
+        </ol>
+      ) : (
+        <p className="activity-empty">Waiting for the next research step…</p>
+      )}
     </details>
+  );
+}
+
+function ActivityRow({ item }: { item: ActivityItem }) {
+  const created = new Date(item.created_at).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return (
+    <li className={`activity-event ${item.status}`}>
+      <span className="activity-event-mark" aria-hidden="true" />
+      <span className="activity-event-copy">
+        <strong>{item.title}</strong>
+        {item.detail ? <span>{item.detail}</span> : null}
+      </span>
+      <time>{created}</time>
+    </li>
   );
 }
 
@@ -282,6 +308,7 @@ export function Transcript({
     () =>
       projection.events.filter(
         (event) =>
+          projectActivity([event]).length > 0 ||
           ![
             "user.message",
             "message.delta",
@@ -370,11 +397,29 @@ export function Transcript({
                 <time>{created}</time>
               </div>
               <div className="message-body">
-                <FriendlyText
-                  assets={assets}
-                  citations={message.citations || []}
-                  text={message.text}
-                />
+                {message.author === "LangAlpha" ? (
+                  <Suspense
+                    fallback={
+                      <FriendlyText
+                        assets={assets}
+                        citations={message.citations || []}
+                        text={message.text}
+                      />
+                    }
+                  >
+                    <MarkdownMessage
+                      assets={assets}
+                      citations={message.citations || []}
+                      text={message.text}
+                    />
+                  </Suspense>
+                ) : (
+                  <FriendlyText
+                    assets={assets}
+                    citations={message.citations || []}
+                    text={message.text}
+                  />
+                )}
               </div>
             </article>
           </div>

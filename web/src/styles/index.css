@@ -536,12 +536,158 @@ svg {
 }
 
 .message.assistant .message-body {
+  white-space: normal;
   font-size: 16px;
   line-height: 1.75;
 }
 
-.message.assistant .message-body::first-line {
+.markdown-content > :first-child {
+  margin-top: 0;
+}
+
+.markdown-content > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-content p,
+.markdown-content ul,
+.markdown-content ol,
+.markdown-content blockquote,
+.markdown-content pre,
+.markdown-content table {
+  margin: 0 0 1em;
+}
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4 {
+  margin: 1.45em 0 0.55em;
   color: var(--ink);
+  font-family: var(--serif);
+  font-weight: 500;
+  letter-spacing: -0.018em;
+  line-height: 1.25;
+}
+
+.markdown-content h1 {
+  font-size: 1.65em;
+}
+
+.markdown-content h2 {
+  font-size: 1.38em;
+}
+
+.markdown-content h3,
+.markdown-content h4 {
+  font-size: 1.16em;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  padding-left: 1.45em;
+}
+
+.markdown-content li {
+  margin: 0.24em 0;
+  padding-left: 0.12em;
+}
+
+.markdown-content li::marker {
+  color: var(--accent);
+}
+
+.markdown-content blockquote {
+  border-left: 3px solid #9ebbb2;
+  color: #4f5a57;
+  padding: 0.1em 0 0.1em 1em;
+}
+
+.markdown-content code {
+  border-radius: 5px;
+  background: #eef3f1;
+  color: #185846;
+  padding: 0.12em 0.36em;
+  font: 0.88em/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.markdown-content pre {
+  overflow: auto;
+  border: 1px solid #d9e2df;
+  border-radius: 9px;
+  background: #f6f8f7;
+  padding: 14px 16px;
+}
+
+.markdown-content pre code {
+  border-radius: 0;
+  background: transparent;
+  color: #26312e;
+  padding: 0;
+  white-space: pre;
+}
+
+.markdown-content a,
+.message-sources a {
+  color: var(--accent);
+  text-decoration-color: #8aafa4;
+  text-underline-offset: 0.18em;
+}
+
+.markdown-content table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.88em;
+}
+
+.markdown-content th,
+.markdown-content td {
+  border: 1px solid var(--line);
+  padding: 7px 10px;
+  text-align: left;
+}
+
+.markdown-content th {
+  background: var(--soft);
+  font-weight: 650;
+}
+
+.markdown-content hr {
+  height: 1px;
+  border: 0;
+  margin: 1.5em 0;
+  background: var(--line);
+}
+
+.markdown-content input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+.message-sources {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  margin-top: 18px;
+  padding-top: 11px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.message-sources > span {
+  flex: 0 0 auto;
+  font-weight: 650;
+}
+
+.message-sources ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 18px;
+  margin: 0;
+  padding-left: 20px;
 }
 
 .inline-file {
@@ -571,19 +717,22 @@ svg {
 .activity {
   margin-top: 18px;
   margin-bottom: 34px;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+  border: 1px solid #dbe5e1;
+  border-radius: 11px;
+  background: #fbfdfc;
 }
 
 .activity summary {
   display: flex;
-  min-height: 54px;
+  min-height: 64px;
   align-items: center;
-  gap: 11px;
+  gap: 12px;
   color: var(--muted);
   cursor: pointer;
   list-style: none;
-  font-size: 13px;
+  padding: 10px 14px;
+  font-size: 12px;
 }
 
 .activity summary::-webkit-details-marker {
@@ -592,8 +741,8 @@ svg {
 
 .activity summary::before {
   display: block;
-  width: 17px;
-  height: 17px;
+  width: 20px;
+  height: 20px;
   flex: 0 0 auto;
   border: 1.5px solid var(--accent);
   border-radius: 50%;
@@ -601,7 +750,7 @@ svg {
   content: "✓";
   text-align: center;
   font-size: 11px;
-  line-height: 15px;
+  line-height: 18px;
 }
 
 .activity.running summary::before {
@@ -627,32 +776,128 @@ svg {
   content: "";
 }
 
+.activity-summary-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.activity-summary-copy strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 660;
+}
+
+.activity-summary-copy > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-count {
+  flex: 0 0 auto;
+  border-radius: 99px;
+  margin-left: auto;
+  background: var(--mint);
+  color: var(--accent-dark);
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 650;
+}
+
 .activity[open] summary::after {
   transform: rotate(225deg) translate(-2px, -2px);
 }
 
 .activity-events {
   display: grid;
-  gap: 8px;
+  gap: 0;
+  border-top: 1px solid #e6ecea;
   margin: 0;
-  padding: 0 0 16px 28px;
+  padding: 8px 14px 12px;
   color: var(--muted);
   list-style: none;
   font-size: 12px;
 }
 
-.activity-events li {
+.activity-event {
   position: relative;
+  display: grid;
+  min-height: 48px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
 }
 
-.activity-events li::before {
+.activity-event:not(:last-child)::after {
   position: absolute;
-  top: 0.65em;
-  left: -15px;
-  width: 5px;
-  height: 1px;
-  background: var(--line-strong);
+  top: 36px;
+  bottom: -12px;
+  left: 7px;
+  width: 1px;
+  background: #dbe5e1;
   content: "";
+}
+
+.activity-event-mark {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid #8fa39d;
+  border-radius: 50%;
+}
+
+.activity-event.complete .activity-event-mark {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: inset 0 0 0 4px white;
+}
+
+.activity-event.running .activity-event-mark {
+  border-color: var(--accent);
+  border-right-color: transparent;
+  animation: spin 0.9s linear infinite;
+}
+
+.activity-event.error .activity-event-mark {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.activity-event-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.activity-event-copy strong {
+  overflow: hidden;
+  color: #33403c;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 630;
+}
+
+.activity-event-copy span {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-event time {
+  color: var(--subtle);
+  font-size: 10px;
+}
+
+.activity-empty {
+  border-top: 1px solid #e6ecea;
+  margin: 0;
+  color: var(--muted);
+  padding: 14px 42px 16px;
+  font-size: 12px;
 }
 
 .widget-card,

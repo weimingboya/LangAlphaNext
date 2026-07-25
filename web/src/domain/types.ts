@@ -132,6 +132,14 @@ export interface AgentProjection {
   status: AgentStatus;
 }
 
+export interface ActivityItem {
+  id: string;
+  title: string;
+  detail?: string;
+  status: "running" | "complete" | "error" | "info";
+  created_at: string;
+}
+
 export interface ProjectedMessage extends AgentEvent {
   author: "You" | "LangAlpha";
   text: string;

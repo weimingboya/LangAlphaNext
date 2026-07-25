@@ -190,22 +190,29 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
 
       dispatchProjection({ type: "reset" });
       const fallbackRunId = snapshot.runs[0]?.id || `snapshot:${threadId}`;
+      const turnRuns = snapshot.runs
+        .filter((run) => !run.parent_run_id)
+        .toReversed();
+      let turnIndex = -1;
+      let messageRunId = turnRuns[0]?.id || fallbackRunId;
       for (const message of snapshot.messages) {
         if (message.role === "user") {
+          turnIndex += 1;
+          messageRunId = turnRuns[turnIndex]?.id || messageRunId;
           recordEvent(
             snapshotEvent(
               threadId,
-              fallbackRunId,
+              messageRunId,
               "user.message",
               { content: message.content ?? "" },
               `snapshot:message:${String(message.id)}`,
             ),
           );
-        } else if (message.role === "assistant") {
+        } else if (["assistant", "tool"].includes(String(message.role))) {
           recordEvent(
             snapshotEvent(
               threadId,
-              fallbackRunId,
+              messageRunId,
               "message.completed",
               message,
               `snapshot:message:${String(message.id)}`,

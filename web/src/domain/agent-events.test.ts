@@ -7,6 +7,7 @@ import {
   formatUsageSummary,
   initialAgentProjection,
   parseAgentEvent,
+  projectActivity,
   reduceAgentEvent,
 } from "./agent-events";
 import {
@@ -63,6 +64,112 @@ describe("AgentEvent projection", () => {
 });
 
 describe("Agent output rendering", () => {
+  test("projects streamed tool calls and results into deduplicated activity", () => {
+    const events = [
+      event({
+        id: "message-1",
+        type: "message.delta",
+        payload: {
+          value: [
+            {
+              type: "AIMessageChunk",
+              tool_calls: [
+                {
+                  id: "call-1",
+                  name: "sec_resolve_company",
+                  args: { query: "Apple" },
+                },
+              ],
+              content: [
+                {
+                  type: "function_call",
+                  id: "function-item-1",
+                  call_id: "call-1",
+                  name: "sec_resolve_company",
+                  arguments: '{"query":"Apple"}',
+                },
+              ],
+            },
+          ],
+        },
+      }),
+      event({
+        id: "message-2",
+        type: "message.delta",
+        payload: {
+          value: [
+            {
+              type: "AIMessageChunk",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call-1",
+                  name: "sec_resolve_company",
+                  args: { query: "Apple Inc." },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+      event({
+        id: "message-3",
+        type: "message.completed",
+        payload: {
+          value: [
+            {
+              type: "tool",
+              name: "sec_resolve_company",
+              tool_call_id: "call-1",
+              status: "success",
+              content: '{"records":[]}',
+            },
+          ],
+        },
+      }),
+    ];
+    expect(projectActivity(events)).toEqual([
+      {
+        id: "tool:run-1:call-1",
+        callId: "call-1",
+        toolName: "sec_resolve_company",
+        title: "Resolve SEC company",
+        detail: "Apple Inc.",
+        status: "complete",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ]);
+  });
+
+  test("projects provider-hosted web search progress", () => {
+    const activity = projectActivity([
+      event({
+        type: "message.delta",
+        payload: {
+          value: [
+            {
+              type: "AIMessageChunk",
+              content: [
+                {
+                  type: "web_search_call",
+                  id: "search-1",
+                  status: "in_progress",
+                  action: { type: "search", query: "Apple latest revenue" },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    ]);
+    expect(activity[0]).toMatchObject({
+      id: "tool:run-1:search-1",
+      title: "Search the web",
+      detail: "Apple latest revenue",
+      status: "running",
+    });
+  });
+
   test("builds a bounded numeric chart model", () => {
     const model = buildChartModel({
       kind: "line",

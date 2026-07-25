@@ -1,4 +1,5 @@
 import type {
+  ActivityItem,
   AgentEvent,
   AgentProjection,
   AgentStatus,
@@ -12,9 +13,290 @@ import type {
 } from "./types";
 
 const TERMINAL_RUN_EVENTS = new Set(["run.success", "run.error", "run.cancelled"]);
+const TOOL_LABELS: Record<string, string> = {
+  ask_user: "Request clarification",
+  check_async_task: "Check research task",
+  fred_get_observations: "Fetch macroeconomic observations",
+  fred_search_series: "Search FRED series",
+  inspect_asset: "Inspect workspace file",
+  market_get_bars: "Fetch market price history",
+  market_get_corporate_actions: "Fetch corporate actions",
+  market_get_snapshots: "Fetch market snapshots",
+  market_resolve_instrument: "Resolve market instrument",
+  materialize_dataset: "Prepare research dataset",
+  sec_get_company_facts: "Fetch SEC company facts",
+  sec_get_filing: "Read SEC filing",
+  sec_list_filings: "List SEC filings",
+  sec_resolve_company: "Resolve SEC company",
+  show_widget: "Build result widget",
+  start_async_task: "Start research task",
+  submit_plan: "Submit research plan",
+  web_search: "Search the web",
+  web_search_call: "Search the web",
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function toolLabel(name: string): string {
+  if (TOOL_LABELS[name]) return TOOL_LABELS[name];
+  const words = name
+    .replace(/^mcp__/, "")
+    .replaceAll("__", " · ")
+    .replaceAll("_", " ")
+    .trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : "Use research tool";
+}
+
+function parseToolArguments(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return trimmed;
+  }
+}
+
+function compactToolDetail(value: unknown): string | undefined {
+  const parsed = parseToolArguments(value);
+  if (!isRecord(parsed)) {
+    if (typeof parsed !== "string") return undefined;
+    return parsed.length > 140 ? `${parsed.slice(0, 137)}…` : parsed;
+  }
+  const preferredKeys = [
+    "query",
+    "symbol",
+    "symbols",
+    "cik",
+    "forms",
+    "series_id",
+    "series_ids",
+    "start_date",
+    "end_date",
+    "agent_name",
+    "description",
+    "task_id",
+    "path",
+    "filename",
+  ];
+  const values = preferredKeys.flatMap((key) => {
+    const current = parsed[key];
+    if (current === undefined || current === null || current === "") return [];
+    const rendered = Array.isArray(current)
+      ? current.slice(0, 4).map(String).join(", ")
+      : String(current);
+    return rendered ? [rendered] : [];
+  });
+  if (!values.length) return undefined;
+  const detail = values.join(" · ");
+  return detail.length > 140 ? `${detail.slice(0, 137)}…` : detail;
+}
+
+interface ToolActivityCandidate extends ActivityItem {
+  callId: string;
+  toolName?: string;
+}
+
+function toolCallCandidate(
+  value: unknown,
+  event: AgentEvent,
+  index: number,
+): ToolActivityCandidate | null {
+  if (!isRecord(value)) return null;
+  const nestedFunction = isRecord(value.function) ? value.function : null;
+  const name = String(
+    value.name ||
+      value.tool_name ||
+      nestedFunction?.name ||
+      (String(value.type || "").toLowerCase() === "web_search_call"
+        ? "web_search"
+        : ""),
+  );
+  if (!name) return null;
+  const callId = String(value.call_id || value.id || `${event.id}:${index}:${name}`);
+  const rawStatus = String(value.status || "").toLowerCase();
+  const complete = ["completed", "complete", "success", "succeeded"].includes(rawStatus);
+  const action = isRecord(value.action) ? value.action : null;
+  const detail = compactToolDetail(
+    value.args ??
+      value.arguments ??
+      value.input ??
+      nestedFunction?.arguments ??
+      action ??
+      null,
+  );
+  return {
+    id: `tool:${event.run_id}:${callId}`,
+    callId,
+    toolName: name,
+    title: toolLabel(name),
+    ...(detail ? { detail } : {}),
+    status: complete ? "complete" : "running",
+    created_at: event.created_at,
+  };
+}
+
+function toolResultCandidate(
+  value: Record<string, unknown>,
+  event: AgentEvent,
+  index: number,
+): ToolActivityCandidate {
+  const callId = String(
+    value.tool_call_id || value.call_id || value.id || `${event.id}:${index}:result`,
+  );
+  const name = typeof value.name === "string" ? value.name : "";
+  const rawStatus = String(value.status || "success").toLowerCase();
+  return {
+    id: `tool:${event.run_id}:${callId}`,
+    callId,
+    ...(name ? { toolName: name } : {}),
+    title: name ? toolLabel(name) : "Research tool",
+    detail: rawStatus === "error" ? "Tool returned an error" : "Completed",
+    status: rawStatus === "error" ? "error" : "complete",
+    created_at: event.created_at,
+  };
+}
+
+function messageToolCandidates(event: AgentEvent): ToolActivityCandidate[] {
+  const candidates: ToolActivityCandidate[] = [];
+  let candidateIndex = 0;
+
+  function visit(value: unknown, depth = 0): void {
+    if (depth > 7) return;
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, depth + 1);
+      return;
+    }
+    if (!isRecord(value)) return;
+
+    const kind = messageKind(value);
+    if (kind === "tool") {
+      candidates.push(toolResultCandidate(value, event, candidateIndex++));
+      return;
+    }
+    if (kind === "assistant") {
+      const calls = Array.isArray(value.tool_calls)
+        ? value.tool_calls
+        : Array.isArray(value.tool_call_chunks)
+          ? value.tool_call_chunks
+          : [];
+      for (const call of calls) {
+        const candidate = toolCallCandidate(call, event, candidateIndex++);
+        if (candidate) candidates.push(candidate);
+      }
+      if (Array.isArray(value.content)) {
+        for (const block of value.content) {
+          if (!isRecord(block)) continue;
+          const blockType = String(block.type || "").toLowerCase();
+          if (
+            blockType === "web_search_call" ||
+            blockType === "mcp_call" ||
+            blockType.includes("tool_use") ||
+            blockType.includes("function_call")
+          ) {
+            const candidate = toolCallCandidate(block, event, candidateIndex++);
+            if (candidate) candidates.push(candidate);
+          }
+        }
+      }
+      return;
+    }
+
+    if ("messages" in value) visit(value.messages, depth + 1);
+    if ("message" in value) visit(value.message, depth + 1);
+    if ("value" in value) visit(value.value, depth + 1);
+    if (event.type === "state.updated") {
+      for (const nested of Object.values(value)) visit(nested, depth + 1);
+    }
+  }
+
+  visit(event.payload);
+  return candidates;
+}
+
+function standaloneActivity(event: AgentEvent): ActivityItem | null {
+  if (event.type === "todo.updated") {
+    return {
+      id: event.id,
+      title: "Update research plan",
+      status: "complete",
+      created_at: event.created_at,
+    };
+  }
+  if (event.type === "sandbox.bound") {
+    return {
+      id: event.id,
+      title: "Prepare secure workspace",
+      status: "complete",
+      created_at: event.created_at,
+    };
+  }
+  if (event.type === "asset.ready") {
+    return {
+      id: event.id,
+      title: "Create research file",
+      detail: String(event.payload.filename || "Artifact ready"),
+      status: "complete",
+      created_at: event.created_at,
+    };
+  }
+  if (event.type === "asset.failed") {
+    return {
+      id: event.id,
+      title: "Create research file",
+      detail: "Artifact generation failed",
+      status: "error",
+      created_at: event.created_at,
+    };
+  }
+  if (event.type === "widget.ready") {
+    const widget = isRecord(event.payload.widget) ? event.payload.widget : event.payload;
+    return {
+      id: event.id,
+      title: "Build result widget",
+      detail: String(widget.title || "Widget ready"),
+      status: "complete",
+      created_at: event.created_at,
+    };
+  }
+  if (event.type === "run.error") {
+    return {
+      id: event.id,
+      title: "Research run failed",
+      detail: String(event.payload.message || event.payload.error || "Unknown error"),
+      status: "error",
+      created_at: event.created_at,
+    };
+  }
+  return null;
+}
+
+export function projectActivity(events: AgentEvent[]): ActivityItem[] {
+  const items = new Map<string, ToolActivityCandidate | ActivityItem>();
+  for (const event of events) {
+    for (const candidate of messageToolCandidates(event)) {
+      const current = items.get(candidate.id);
+      items.set(candidate.id, {
+        ...current,
+        ...candidate,
+        title:
+          candidate.toolName || !current
+            ? candidate.title
+            : current.title,
+        detail:
+          candidate.status === "complete" && current?.detail
+            ? current.detail
+            : candidate.detail || current?.detail,
+        created_at: current?.created_at || candidate.created_at,
+      });
+    }
+    const standalone = standaloneActivity(event);
+    if (standalone) items.set(standalone.id, standalone);
+  }
+  return [...items.values()];
 }
 
 function requireString(value: unknown, field: string): string {
