@@ -19,6 +19,7 @@ dependencies = [
     "orjson==3.11.9",
     "pydantic-settings==2.14.2",
     "supabase==2.31.0",
+    "tzdata==2026.3",
     "uvicorn[standard]==0.51.0",
 ]
 
