@@ -359,6 +359,24 @@ def test_agent_gateway_passes_deployment_api_key(monkeypatch) -> None:
     }
 
 
+async def test_agent_gateway_healthcheck_resolves_graph_name(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeAssistants:
+        async def search(self, **kwargs: object) -> list[dict[str, str]]:
+            captured.update(kwargs)
+            return [{"assistant_id": "00000000-0000-0000-0000-000000000001"}]
+
+    monkeypatch.setattr(
+        "langalpha.server.agent_gateway.get_client",
+        lambda **_: SimpleNamespace(assistants=FakeAssistants()),
+    )
+
+    await AgentGateway("https://agent.example").healthcheck("main")
+
+    assert captured == {"graph_id": "main", "limit": 1}
+
+
 def test_ready_rejects_unreachable_dependencies() -> None:
     client, gateway, _ = _client()
 

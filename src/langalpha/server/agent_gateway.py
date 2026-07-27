@@ -299,7 +299,9 @@ class AgentGateway:
         self.client = get_client(url=server_url, api_key=api_key)
 
     async def healthcheck(self, assistant_id: str) -> None:
-        await self.client.assistants.get(assistant_id)
+        assistants = await self.client.assistants.search(graph_id=assistant_id, limit=1)
+        if not assistants:
+            raise RuntimeError(f"Agent Server graph is unavailable: {assistant_id}")
 
     async def create_thread(
         self,
