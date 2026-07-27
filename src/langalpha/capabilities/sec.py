@@ -11,6 +11,7 @@ from langchain.tools import ToolRuntime, tool
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from langalpha.agent.context import RunContext
+from langalpha.capabilities.errors import raise_for_provider_status
 from langalpha.capabilities.gateway import gateway
 from langalpha.config import get_settings
 
@@ -49,8 +50,12 @@ class FilingsInput(PublicRuntimeInput):
 
 class FilingDocumentInput(PublicRuntimeInput):
     cik: str
-    accession_number: str
-    primary_document: str
+    accession_number: str = Field(
+        description="Exact accessionNumber returned by sec_list_filings for this CIK.",
+    )
+    primary_document: str = Field(
+        description="Exact primaryDocument returned by sec_list_filings; never infer it.",
+    )
     query: str | None = Field(default=None, max_length=300)
     max_chars: int = Field(default=30_000, ge=2_000, le=100_000)
 
@@ -83,7 +88,7 @@ class CompanyFactsInput(PublicRuntimeInput):
     forms: list[str] | None = Field(default=None, max_length=20)
     start_date: date | None = None
     end_date: date | None = None
-    limit_per_concept: int = Field(default=40, ge=1, le=200)
+    limit_per_concept: int = Field(default=20, ge=1, le=20)
 
     @field_validator("cik")
     @classmethod
@@ -140,8 +145,7 @@ def _client() -> httpx.AsyncClient:
 
 async def _get(client: httpx.AsyncClient, url: str) -> httpx.Response:
     response = await client.get(url)
-    if response.status_code >= 400:
-        raise RuntimeError(f"SEC request failed with HTTP {response.status_code}")
+    raise_for_provider_status("SEC", response.status_code)
     return response
 
 
@@ -299,7 +303,7 @@ async def sec_get_filing(
     query: str | None = None,
     max_chars: int = 30_000,
 ) -> str:
-    """Retrieve bounded readable text from a specific SEC primary filing document."""
+    """Retrieve a filing using exact identifiers copied from sec_list_filings."""
     gateway.admit_runtime("sec.get_filing", runtime)
     source = (
         "https://www.sec.gov/Archives/edgar/data/"
@@ -342,16 +346,19 @@ async def sec_get_company_facts(
     forms: list[str] | None = None,
     start_date: date | None = None,
     end_date: date | None = None,
-    limit_per_concept: int = 40,
+    limit_per_concept: int = 20,
 ) -> str:
-    """Get bounded SEC XBRL company facts for requested financial concepts."""
+    """Get bounded SEC XBRL facts matching the requested concept tags exactly."""
     if start_date and end_date and start_date > end_date:
         raise ValueError("start_date must not be after end_date")
     gateway.admit_runtime("sec.company_facts", runtime)
     source = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
     async with _client() as client:
         payload = (await _get(client, source)).json()
-    requested = [value.casefold() for value in concepts]
+    requested = {
+        value.rsplit(":", maxsplit=1)[-1].casefold()
+        for value in concepts
+    }
     normalized_forms = {value.upper() for value in forms or []}
     records = []
     facts = payload.get("facts") or {}
@@ -360,8 +367,7 @@ async def sec_get_company_facts(
             continue
         for tag, fact in taxonomy_facts.items():
             label = str(fact.get("label", ""))
-            haystack = f"{taxonomy}:{tag} {tag} {label}".casefold()
-            if not any(value == tag.casefold() or value in haystack for value in requested):
+            if tag.casefold() not in requested:
                 continue
             units = fact.get("units") or {}
             concept_rows = []

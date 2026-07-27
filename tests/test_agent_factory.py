@@ -126,6 +126,41 @@ def test_provider_native_tools_disable_quickjs_ptc(monkeypatch) -> None:
         get_settings.cache_clear()
 
 
+def test_factory_uses_tpm_aware_model_and_tool_retry_policies(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    get_settings.cache_clear()
+    model_retry_kwargs: list[dict[str, object]] = []
+    tool_retry_kwargs: list[dict[str, object]] = []
+    real_model_retry = factory_module.ModelRetryMiddleware
+    real_tool_retry = factory_module.ToolRetryMiddleware
+
+    def capture_model_retry(**kwargs):
+        model_retry_kwargs.append(kwargs)
+        return real_model_retry(**kwargs)
+
+    def capture_tool_retry(**kwargs):
+        tool_retry_kwargs.append(kwargs)
+        return real_tool_retry(**kwargs)
+
+    monkeypatch.setattr(factory_module, "ModelRetryMiddleware", capture_model_retry)
+    monkeypatch.setattr(factory_module, "ToolRetryMiddleware", capture_tool_retry)
+    try:
+        DeepAgentFactory().create("main")
+    finally:
+        get_settings.cache_clear()
+
+    assert model_retry_kwargs == [
+        {
+            "max_retries": 3,
+            "initial_delay": 10,
+            "max_delay": 60,
+            "on_failure": "error",
+        }
+    ]
+    assert len(tool_retry_kwargs) == 1
+    assert tool_retry_kwargs[0]["retry_on"] is factory_module.is_retryable_tool_error
+
+
 def test_filesystem_permissions_protect_read_only_product_routes() -> None:
     snapshot = [
         {

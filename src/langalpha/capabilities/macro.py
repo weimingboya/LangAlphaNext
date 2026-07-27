@@ -11,6 +11,7 @@ from langchain.tools import ToolRuntime, tool
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from langalpha.agent.context import RunContext
+from langalpha.capabilities.errors import raise_for_provider_status
 from langalpha.capabilities.gateway import gateway
 from langalpha.config import get_settings
 
@@ -70,8 +71,7 @@ async def _fred_get(
         response = await client.get(path, params=safe_params)
     except httpx.RequestError as exc:
         raise RuntimeError("FRED request failed before receiving a response") from exc
-    if response.status_code >= 400:
-        raise RuntimeError(f"FRED request failed with HTTP {response.status_code}")
+    raise_for_provider_status("FRED", response.status_code)
     try:
         payload = response.json()
     except ValueError as exc:

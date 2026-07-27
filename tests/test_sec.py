@@ -4,9 +4,16 @@ import json
 from types import SimpleNamespace
 
 import httpx
+import pytest
+from pydantic import ValidationError
 
 from langalpha.agent.context import RunContext
 from langalpha.capabilities import sec as module
+from langalpha.capabilities.errors import (
+    NonRetryableToolError,
+    is_retryable_tool_error,
+    raise_for_provider_status,
+)
 from langalpha.config import get_settings
 
 
@@ -109,6 +116,81 @@ async def test_company_facts_include_deterministic_usd_scales(monkeypatch) -> No
     assert normalized["raw"] == 416_161_000_000
     assert normalized["usd_billions"] == 416.161
     assert normalized["usd_hundred_millions"] == 4161.61
+
+
+async def test_company_facts_match_exact_tags_and_use_bounded_default(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SEC_USER_AGENT", "LangAlpha test@example.com")
+    get_settings.cache_clear()
+
+    observations = [
+        {
+            "val": index,
+            "form": "10-Q",
+            "end": f"2025-{(index % 12) + 1:02d}-01",
+            "filed": f"2025-{(index % 12) + 1:02d}-02",
+        }
+        for index in range(25)
+    ]
+
+    async def fake_get(_client: object, url: str) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=httpx.Request("GET", url),
+            json={
+                "facts": {
+                    "us-gaap": {
+                        "Assets": {
+                            "label": "Assets",
+                            "units": {"USD": observations},
+                        },
+                        "AssetsCurrent": {
+                            "label": "Current Assets",
+                            "units": {"USD": observations},
+                        },
+                        "AccruedLiabilitiesCurrent": {
+                            "label": "Accrued Liabilities",
+                            "units": {"USD": observations},
+                        },
+                    }
+                }
+            },
+        )
+
+    monkeypatch.setattr(module, "_get", fake_get)
+    result = await module.sec_get_company_facts.coroutine(
+        cik="0000320193",
+        concepts=["us-gaap:Assets"],
+        runtime=_runtime(),
+    )
+    records = json.loads(result)["records"]
+
+    assert len(records) == 20
+    assert {record["concept"] for record in records} == {"Assets"}
+
+
+def test_company_facts_reject_unbounded_per_concept_limit() -> None:
+    schema = module.sec_get_company_facts.args_schema
+
+    with pytest.raises(ValidationError):
+        schema(
+            cik="0000320193",
+            concepts=["Assets"],
+            limit_per_concept=21,
+            runtime=_runtime(),
+        )
+
+
+def test_provider_http_errors_expose_retry_semantics() -> None:
+    with pytest.raises(NonRetryableToolError, match="HTTP 404") as permanent:
+        raise_for_provider_status("SEC", 404)
+    with pytest.raises(RuntimeError, match="HTTP 503") as transient:
+        raise_for_provider_status("SEC", 503)
+
+    assert is_retryable_tool_error(permanent.value) is False
+    assert is_retryable_tool_error(transient.value) is True
+    assert is_retryable_tool_error(ValueError("invalid arguments")) is False
 
 
 def test_sec_tool_schemas_hide_runtime_injection() -> None:

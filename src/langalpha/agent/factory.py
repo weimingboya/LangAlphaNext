@@ -30,6 +30,7 @@ from langalpha.agent.responses import ResearchResult
 from langalpha.agent.state import LangAlphaAgentState
 from langalpha.agent.tools import HOST_TOOLS
 from langalpha.backends import get_context_daytona_backend, get_researcher_backend
+from langalpha.capabilities.errors import is_retryable_tool_error
 from langalpha.capabilities.finance import FINANCE_TOOLS, RESEARCH_FINANCE_TOOLS
 from langalpha.capabilities.macro import MACRO_TOOLS
 from langalpha.capabilities.openai_web import (
@@ -159,8 +160,8 @@ class DeepAgentFactory:
             ),
             ModelRetryMiddleware(
                 max_retries=3,
-                initial_delay=1,
-                max_delay=8,
+                initial_delay=10,
+                max_delay=60,
                 on_failure="error",
             ),
         ]
@@ -188,6 +189,7 @@ class DeepAgentFactory:
                 ToolRetryMiddleware(
                     max_retries=2,
                     tools=retryable_tools,
+                    retry_on=is_retryable_tool_error,
                     initial_delay=0.5,
                     max_delay=4,
                     on_failure="continue",

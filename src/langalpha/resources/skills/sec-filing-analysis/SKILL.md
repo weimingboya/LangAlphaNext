@@ -10,7 +10,9 @@ Use this skill when a conclusion depends on a public company's regulatory filing
 1. Resolve the issuer with `sec_resolve_company`; never infer a CIK from memory.
 2. Use `sec_list_filings` to identify the exact form, filing date, accession,
    and primary document.
-3. Retrieve the filing with `sec_get_filing`. Search for the relevant section
+3. For each issuer, call `sec_list_filings` first, then pass its exact
+   `accessionNumber` and `primaryDocument` values to `sec_get_filing`; never
+   infer either identifier. Search for the relevant section
    before requesting more text.
 4. Treat management statements, audited facts, risk disclosures, and your own
    inference as separate evidence classes.

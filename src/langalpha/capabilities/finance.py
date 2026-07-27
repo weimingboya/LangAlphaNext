@@ -13,6 +13,7 @@ from langchain.tools import ToolRuntime, tool
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from langalpha.agent.context import RunContext
+from langalpha.capabilities.errors import raise_for_provider_status
 from langalpha.capabilities.gateway import gateway
 from langalpha.config import get_settings
 
@@ -103,8 +104,7 @@ async def _massive_get(
     params: dict[str, Any],
 ) -> dict[str, Any]:
     response = await client.get(path, params=params)
-    if response.status_code >= 400:
-        raise RuntimeError(f"Massive request failed with HTTP {response.status_code}")
+    raise_for_provider_status("Massive", response.status_code)
     payload = response.json()
     if not isinstance(payload, dict):
         raise RuntimeError("Massive returned an invalid response")
