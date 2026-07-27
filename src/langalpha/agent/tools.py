@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import csv
 import hashlib
-import io
 import json
 import mimetypes
 import posixpath
-import re
 from typing import Any, Literal
 
-from deepagents.backends.utils import sanitize_tool_call_id
 from langchain.tools import ToolRuntime, tool
 from langgraph.config import get_stream_writer
 from langgraph.types import interrupt
@@ -25,40 +21,6 @@ class RuntimeToolInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     runtime: ToolRuntime[RunContext, object]
-
-
-class DatasetMaterializeInput(RuntimeToolInput):
-    logical_operation_id: str = Field(
-        min_length=1,
-        max_length=120,
-        description="Stable logical ID reused when retrying the same materialization.",
-    )
-    name: str = Field(min_length=1, max_length=80)
-    records: list[dict[str, Any]] | None = Field(
-        default=None,
-        description="Inline records for small/manual datasets.",
-    )
-    source_tool_call_id: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=200,
-        description=(
-            "Preferred for large results: the prior ToolMessage call ID whose "
-            "JSON content contains a records array."
-        ),
-    )
-    source: str = Field(
-        min_length=1,
-        max_length=500,
-        description="Tool/server/source identifier used to produce these records.",
-    )
-    file_format: Literal["jsonl", "csv"] = "jsonl"
-
-    @model_validator(mode="after")
-    def exactly_one_record_source(self) -> DatasetMaterializeInput:
-        if (self.records is None) == (self.source_tool_call_id is None):
-            raise ValueError("provide exactly one of records or source_tool_call_id")
-        return self
 
 
 class AskUserInput(RuntimeToolInput):
@@ -100,168 +62,11 @@ class ShowWidgetInput(RuntimeToolInput):
         return self
 
 
-def _safe_name(value: str) -> str:
-    name = re.sub(r"[^a-zA-Z0-9_.-]+", "-", value).strip(".-")
-    if not name:
-        raise ValueError("dataset name must contain a letter or number")
-    return name[:80]
-
-
 def _require_context(runtime: ToolRuntime[RunContext, object]) -> RunContext:
     context = runtime.context
     if not isinstance(context, RunContext):
         raise RuntimeError("server-issued RunContext is required")
     return context
-
-
-def _offloaded_tool_message_content(content: str, tool_call_id: str) -> str | None:
-    path = (
-        "/workspace/artifacts/large_tool_results/"
-        f"{sanitize_tool_call_id(tool_call_id)}"
-    )
-    header = (
-        "Tool result too large, the result of this tool call "
-        f"{tool_call_id} was saved in the filesystem at this path: {path}\n"
-    )
-    if not content.startswith(header):
-        return None
-    response = get_context_daytona_backend().download_files([path])[0]
-    if response.error or response.content is None:
-        raise FileNotFoundError(f"offloaded tool result is unavailable: {path}")
-    try:
-        return bytes(response.content).decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise ValueError("offloaded source ToolMessage is not UTF-8 JSON") from exc
-
-
-def _tool_message_records(
-    runtime: ToolRuntime[RunContext, object],
-    tool_call_id: str,
-) -> list[dict[str, Any]]:
-    state = runtime.state
-    if isinstance(state, dict):
-        messages = state.get("messages", [])
-    else:
-        messages = getattr(state, "messages", [])
-    fallback_candidates: list[list[dict[str, Any]]] = []
-    for message in reversed(messages):
-        message_call_id = (
-            message.get("tool_call_id")
-            if isinstance(message, dict)
-            else getattr(message, "tool_call_id", None)
-        )
-        content = (
-            message.get("content")
-            if isinstance(message, dict)
-            else getattr(message, "content", None)
-        )
-        if isinstance(content, list):
-            text_blocks = [
-                block.get("text", "")
-                for block in content
-                if isinstance(block, dict) and block.get("type") == "text"
-            ]
-            content = "".join(text_blocks)
-        if not isinstance(content, str):
-            if message_call_id == tool_call_id:
-                raise ValueError("source ToolMessage does not contain JSON text")
-            continue
-        try:
-            parsed = json.loads(content)
-        except json.JSONDecodeError:
-            if message_call_id == tool_call_id:
-                offloaded_content = _offloaded_tool_message_content(content, tool_call_id)
-                if offloaded_content is None:
-                    raise ValueError(
-                        "source ToolMessage does not contain valid JSON"
-                    ) from None
-                try:
-                    parsed = json.loads(offloaded_content)
-                except json.JSONDecodeError:
-                    raise ValueError(
-                        "offloaded source ToolMessage does not contain valid JSON"
-                    ) from None
-            else:
-                continue
-        candidate = parsed.get("records") if isinstance(parsed, dict) else parsed
-        if not isinstance(candidate, list) or not all(isinstance(row, dict) for row in candidate):
-            if message_call_id == tool_call_id:
-                raise ValueError("source ToolMessage JSON has no records array")
-            continue
-        if message_call_id == tool_call_id:
-            return candidate
-        fallback_candidates.append(candidate)
-    if len(fallback_candidates) == 1:
-        return fallback_candidates[0]
-    if len(fallback_candidates) > 1:
-        raise ValueError(
-            f"source ToolMessage not found: {tool_call_id}; "
-            "multiple record-producing ToolMessages make fallback ambiguous"
-        )
-    raise ValueError(f"source ToolMessage not found: {tool_call_id}")
-
-
-@tool(args_schema=DatasetMaterializeInput)
-def materialize_dataset(
-    logical_operation_id: str,
-    name: str,
-    source: str,
-    runtime: ToolRuntime[RunContext, object],
-    records: list[dict[str, Any]] | None = None,
-    source_tool_call_id: str | None = None,
-    file_format: Literal["jsonl", "csv"] = "jsonl",
-) -> str:
-    """Materialize structured host-tool results into the workspace sandbox.
-
-    Use this when a business/MCP tool returns enough rows that repeated model
-    inspection would be wasteful. The returned absolute path can be consumed
-    directly by Python or shell commands in the Daytona workspace.
-    """
-
-    _require_context(runtime)
-    if (records is None) == (source_tool_call_id is None):
-        raise ValueError("provide exactly one record source")
-    resolved_records = (
-        records
-        if records is not None
-        else _tool_message_records(runtime, source_tool_call_id or "")
-    )
-    safe_name = _safe_name(name)
-    operation_id = _safe_name(logical_operation_id)
-    if file_format == "jsonl":
-        content = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in resolved_records)
-        columns = sorted({key for row in resolved_records for key in row})
-    else:
-        columns = sorted({key for row in resolved_records for key in row})
-        buffer = io.StringIO()
-        writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(resolved_records)
-        content = buffer.getvalue()
-
-    payload = content.encode("utf-8")
-    checksum = hashlib.sha256(payload).hexdigest()
-    path = f"/workspace/input/{operation_id}/{safe_name}.{file_format}"
-    backend = get_context_daytona_backend()
-    backend.execute(f"mkdir -p /workspace/input/{operation_id}")
-    result = backend.write(path, content)
-    if result.error:
-        existing = backend.read(path)
-        file_data = existing.file_data if existing.error is None else None
-        existing_content = file_data.get("content") if file_data else None
-        if existing_content != content:
-            raise RuntimeError("logical_operation_id already exists with different dataset content")
-    return json.dumps(
-        {
-            "path": path,
-            "format": file_format,
-            "schema": {"columns": columns},
-            "row_count": len(resolved_records),
-            "source": source,
-            "checksum": checksum,
-        },
-        ensure_ascii=False,
-    )
 
 
 @tool(args_schema=AskUserInput)
@@ -375,7 +180,6 @@ def show_widget(
 
 
 HOST_TOOLS = [
-    materialize_dataset,
     inspect_asset,
     show_widget,
     ask_user,

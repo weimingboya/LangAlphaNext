@@ -34,7 +34,6 @@ def test_factory_is_single_harness_entry_and_exposes_expected_tools(
         "grep",
         "execute",
         "eval",
-        "materialize_dataset",
         "inspect_asset",
         "show_widget",
         "market_resolve_instrument",
@@ -73,7 +72,6 @@ def test_factory_is_single_harness_entry_and_exposes_expected_tools(
     assert {
         "task",
         "market_get_snapshots",
-        "materialize_dataset",
         "inspect_asset",
         "show_widget",
         "ask_user",
@@ -107,7 +105,7 @@ def test_snapshot_tool_is_exposed_only_when_entitlement_is_enabled(
 
 def test_provider_native_tools_disable_quickjs_ptc(monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test")
-    monkeypatch.setenv("MCP_PTC_ALLOWLIST", '["materialize_dataset"]')
+    monkeypatch.setenv("MCP_PTC_ALLOWLIST", '["external_tool"]')
     get_settings.cache_clear()
     captured_ptc: list[object] = []
     real_middleware = factory_module.CodeInterpreterMiddleware

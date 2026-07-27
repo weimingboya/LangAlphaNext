@@ -23,7 +23,6 @@ _TOOL_LABELS = {
     "market_get_corporate_actions": "Fetch corporate actions",
     "market_get_snapshots": "Fetch market snapshots",
     "market_resolve_instrument": "Resolve market instrument",
-    "materialize_dataset": "Prepare research dataset",
     "read_file": "Read file",
     "sec_get_company_facts": "Fetch SEC company facts",
     "sec_get_filing": "Read SEC filing",
@@ -55,7 +54,6 @@ _RESULT_SUMMARY_TOOLS = {
     "sec_get_filing",
     "sec_list_filings",
     "sec_resolve_company",
-    "materialize_dataset",
     "show_widget",
     *_SUBAGENT_TOOLS,
 }

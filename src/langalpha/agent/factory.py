@@ -128,8 +128,7 @@ class DeepAgentFactory:
             *(
                 tool
                 for tool in mcp_tools
-                if tool.name in selected_tool_names
-                and tool.name not in {"materialize_dataset", "ask_user"}
+                if tool.name in selected_tool_names and tool.name != "ask_user"
             ),
         ]
         ptc_names = [
