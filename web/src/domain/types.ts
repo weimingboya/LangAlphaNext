@@ -97,6 +97,19 @@ export interface UsageSummary {
   estimated_cost_usd?: number | null;
 }
 
+export interface ThreadBranchOption {
+  checkpoint_id: string;
+  preview: string;
+  created_at: string;
+}
+
+export interface ThreadBranchState {
+  current_checkpoint_id?: string | null;
+  current_index: number;
+  options: ThreadBranchOption[];
+  can_edit_latest: boolean;
+}
+
 export interface ThreadSnapshot {
   thread: Thread;
   runs: Run[];
@@ -107,6 +120,7 @@ export interface ThreadSnapshot {
   widgets: Widget[];
   usage: UsageSummary;
   assets: Asset[];
+  branch: ThreadBranchState;
 }
 
 export interface AgentEvent {

@@ -54,6 +54,8 @@ class RunCreate(BaseModel):
     message: str = Field(min_length=1, max_length=100_000)
     strategy: RunStrategy = "enqueue"
     input_asset_ids: list[str] = Field(default_factory=list, max_length=50)
+    branch_checkpoint_id: str | None = None
+    edit_latest: bool = False
 
 
 RunStatus = Literal[
@@ -149,6 +151,19 @@ class PublicConfig(BaseModel):
     max_upload_bytes: int
 
 
+class ThreadBranchOption(BaseModel):
+    checkpoint_id: str
+    preview: str
+    created_at: datetime
+
+
+class ThreadBranchState(BaseModel):
+    current_checkpoint_id: str | None = None
+    current_index: int = 0
+    options: list[ThreadBranchOption] = Field(default_factory=list)
+    can_edit_latest: bool = False
+
+
 class ThreadSnapshot(BaseModel):
     """Reloadable UI projection assembled from authoritative resources."""
 
@@ -161,6 +176,7 @@ class ThreadSnapshot(BaseModel):
     widgets: list[dict[str, Any]]
     usage: UsageSummary
     assets: list[Asset]
+    branch: ThreadBranchState
 
 
 class ResumeRun(BaseModel):

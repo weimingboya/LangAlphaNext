@@ -122,9 +122,26 @@ export function ResearchWorkspace({ client, onSignOut }: ResearchWorkspaceProps)
         ) : (
           <Transcript
             assets={workspace.assets}
+            branch={workspace.branch}
             htmlPreview={workspace.htmlPreview}
             onDownload={workspace.downloadAsset}
+            onEditLatest={async (message) => {
+              try {
+                await workspace.editLatestMessage(message);
+              } catch (reason) {
+                report(reason);
+                throw reason;
+              }
+            }}
             onResume={workspace.resumeInterrupt}
+            onSelectBranch={async (checkpointId) => {
+              try {
+                await workspace.selectBranch(checkpointId);
+              } catch (reason) {
+                report(reason);
+                throw reason;
+              }
+            }}
             projection={workspace.projection}
           />
         )}

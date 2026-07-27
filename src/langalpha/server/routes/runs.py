@@ -23,6 +23,17 @@ from langalpha.server.agent_gateway import (
 from langalpha.server.async_task_lifecycle import cancel_child_tasks
 from langalpha.server.dependencies import ServicesDep, UserDep, remote_status
 from langalpha.server.public_projection import project_public_events
+from langalpha.server.thread_branches import (
+    InvalidBranch,
+    branch_run_ids,
+    branch_state,
+    editable_content,
+    latest_user_edit,
+    require_branch_leaf,
+)
+from langalpha.server.thread_branches import (
+    checkpoint_id as state_checkpoint_id,
+)
 
 router = APIRouter(prefix="/api/threads/{thread_id}")
 logger = logging.getLogger(__name__)
@@ -73,7 +84,10 @@ async def create_run(
     thread = await services.require_thread(thread_id, user)
     project = await services.project_for_thread(thread, user)
     try:
-        state = await services.gateway.state(thread.id)
+        state = await services.gateway.state(
+            thread.id,
+            checkpoint_id=body.branch_checkpoint_id,
+        )
     except Exception as exc:
         raise HTTPException(
             status_code=502,
@@ -85,21 +99,76 @@ async def create_run(
             detail="thread is waiting for input; resume its interrupted run",
         )
 
+    history: list[dict] = []
+    if body.branch_checkpoint_id:
+        try:
+            history = await services.gateway.history(thread.id)
+            require_branch_leaf(history, body.branch_checkpoint_id)
+        except InvalidBranch as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="Agent Server history is unavailable",
+            ) from exc
+
+    if body.edit_latest and not body.branch_checkpoint_id:
+        raise HTTPException(
+            status_code=422,
+            detail="editing requires a selected branch",
+        )
+    if body.edit_latest and body.strategy != "enqueue":
+        raise HTTPException(
+            status_code=409,
+            detail="a message cannot be edited while a run is active",
+        )
+
+    source_checkpoint: dict | None = None
+    run_input: dict | None
+    source_run_id = ""
+    asset_ids = list(body.input_asset_ids)
+    if body.edit_latest:
+        try:
+            source_checkpoint, replacement_message, source_run_id = latest_user_edit(
+                history,
+                body.branch_checkpoint_id or "",
+                body.message,
+            )
+            if source_run_id:
+                source_metadata = await services.gateway.run_metadata(
+                    thread.id,
+                    source_run_id,
+                )
+                raw_asset_ids = source_metadata.get("input_asset_ids")
+                if isinstance(raw_asset_ids, list):
+                    asset_ids = [str(asset_id) for asset_id in raw_asset_ids]
+        except InvalidBranch as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="Agent Server could not prepare the edited branch",
+            ) from exc
+        run_input = None
+    else:
+        replacement_message = None
+        run_input = {"messages": [{"role": "user", "content": body.message}]}
+
     input_assets = await services.require_assets(
         user=user,
         project=project,
         thread=thread,
-        asset_ids=body.input_asset_ids,
+        asset_ids=asset_ids,
     )
-    message = body.message
-    if input_assets:
+    if input_assets and not body.edit_latest:
         paths = [
             f"/workspace/input/assets/{asset.id}/{safe_filename(asset.filename)}"
             for asset in input_assets
         ]
-        message = f"{message}\n\nAvailable input files:\n" + "\n".join(
+        message = f"{body.message}\n\nAvailable input files:\n" + "\n".join(
             f"- {path}" for path in paths
         )
+        run_input = {"messages": [{"role": "user", "content": message}]}
 
     turn_id = str(uuid4())
     settings = services.settings
@@ -111,23 +180,56 @@ async def create_run(
         "turn_id": turn_id,
         "app_version": settings.app_version,
         "environment": settings.app_environment,
-        "input_asset_ids": body.input_asset_ids,
+        "input_asset_ids": asset_ids,
+        "branch_parent_checkpoint_id": body.branch_checkpoint_id,
+        "edit_latest": body.edit_latest,
     }
     try:
-        remote = await services.gateway.create(
-            thread.id,
-            settings.langgraph_assistant_id,
-            strategy=body.strategy,
-            input={"messages": [{"role": "user", "content": message}]},
-            context=services.run_context(
+        run_checkpoint = (
+            {
+                "thread_id": thread.id,
+                "checkpoint_ns": "",
+                "checkpoint_id": body.branch_checkpoint_id,
+            }
+            if body.branch_checkpoint_id
+            else None
+        )
+        if body.edit_latest:
+            if source_checkpoint is None or replacement_message is None:
+                raise InvalidBranch("the latest user message could not be edited")
+            fork = await services.gateway.update_state(
+                thread.id,
+                checkpoint=source_checkpoint,
+                values={"messages": [replacement_message]},
+            )
+            fork_checkpoint = fork.get("checkpoint")
+            if not isinstance(fork_checkpoint, dict):
+                raise RuntimeError("Agent Server did not return a fork checkpoint")
+            run_checkpoint = fork_checkpoint
+            metadata["edited_message_id"] = replacement_message["id"]
+            metadata["source_run_id"] = source_run_id
+
+        create_kwargs = {
+            "input": run_input,
+            "context": services.run_context(
                 user=user,
                 project=project,
                 thread=thread,
                 turn_id=turn_id,
-                input_asset_ids=body.input_asset_ids,
+                input_asset_ids=asset_ids,
             ),
-            metadata=metadata,
+            "metadata": metadata,
+        }
+        if run_checkpoint is not None:
+            create_kwargs["checkpoint"] = run_checkpoint
+        remote = await services.gateway.create(
+            thread.id,
+            settings.langgraph_assistant_id,
+            strategy=body.strategy,
+            **create_kwargs,
         )
+    except InvalidBranch as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=remote_status(exc),
@@ -258,13 +360,15 @@ async def get_snapshot(
     thread_id: str,
     user: UserDep,
     services: ServicesDep,
+    checkpoint_id: str | None = None,
 ) -> ThreadSnapshot:
     thread = await services.require_thread(thread_id, user)
     project = await services.project_for_thread(thread, user)
     try:
-        state, runs, thread_assets = await asyncio.gather(
-            services.gateway.state(thread.id),
+        state, runs, history, thread_assets = await asyncio.gather(
+            services.gateway.state(thread.id, checkpoint_id=checkpoint_id),
             services.gateway.runs(thread.id),
+            services.gateway.history(thread.id),
             asyncio.to_thread(
                 services.asset_store.list_assets,
                 owner_id=user.id,
@@ -276,8 +380,30 @@ async def get_snapshot(
             status_code=502,
             detail="thread snapshot is unavailable",
         ) from exc
+    selected_checkpoint_id = state_checkpoint_id(state)
+    if selected_checkpoint_id and all(
+        state_checkpoint_id(item) != selected_checkpoint_id for item in history
+    ):
+        history = [state, *history]
+    branch = branch_state(history, state)
+    selected_run_ids = branch_run_ids(history, branch.current_checkpoint_id)
+    if selected_run_ids:
+        runs = [
+            run
+            for run in runs
+            if run.id in selected_run_ids or run.status in {"pending", "running"}
+        ]
     internal_messages = state_messages(state)
     messages = normalize_messages(state)
+    messages = [
+        {
+            **message,
+            "content": editable_content(message.get("content")),
+        }
+        if message.get("role") == "user"
+        else message
+        for message in messages
+    ]
     return ThreadSnapshot(
         thread=thread,
         runs=runs,
@@ -296,6 +422,7 @@ async def get_snapshot(
             output_cost_per_million=services.settings.openai_output_cost_per_million,
         ),
         assets=thread_assets,
+        branch=branch,
     )
 
 

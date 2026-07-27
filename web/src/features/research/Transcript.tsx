@@ -1,3 +1,6 @@
+import { CaretLeftIcon } from "@phosphor-icons/react/dist/icons/CaretLeft";
+import { CaretRightIcon } from "@phosphor-icons/react/dist/icons/CaretRight";
+import { PencilSimpleIcon } from "@phosphor-icons/react/dist/icons/PencilSimple";
 import {
   lazy,
   Suspense,
@@ -24,6 +27,7 @@ import type {
   Citation,
   JsonObject,
   RenderSegment,
+  ThreadBranchState,
   Widget,
 } from "../../domain/types";
 import { WidgetCard } from "./WidgetCard";
@@ -80,6 +84,7 @@ function Activity({
 }) {
   const items = projectActivity(events);
   const latest = items.at(-1);
+  const visuallyComplete = projection.status.label === "Analysis complete";
   const title =
     projection.status.mode === "active"
       ? "Researching"
@@ -89,8 +94,6 @@ function Activity({
   let label = latest?.title || projection.status.label;
   if (projection.status.mode === "active") {
     label = latest ? latest.title : "Working through the research plan";
-  } else if (events.some((event) => event.type === "run.success")) {
-    label = "Research complete";
   }
   return (
     <details
@@ -113,7 +116,7 @@ function Activity({
       {items.length ? (
         <ol className="activity-events">
           {items.slice(-16).map((item) => (
-            <ActivityRow item={item} key={item.id} />
+            <ActivityRow item={item} key={item.id} settled={visuallyComplete} />
           ))}
         </ol>
       ) : (
@@ -123,28 +126,25 @@ function Activity({
   );
 }
 
-function ActivityRow({ item }: { item: ActivityItem }) {
+function ActivityRow({ item, settled }: { item: ActivityItem; settled: boolean }) {
   const created = new Date(item.created_at).toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
   });
   const expandableReasoning = item.kind === "reasoning" && Boolean(item.detail);
+  const status = settled && item.status === "running" ? "complete" : item.status;
   return (
-    <li className={`activity-event ${item.status}${item.kind ? ` ${item.kind}` : ""}`}>
+    <li className={`activity-event ${status}${item.kind ? ` ${item.kind}` : ""}`}>
       <span className="activity-event-mark" aria-hidden="true" />
       <div className="activity-event-copy">
         <strong>{item.title}</strong>
         {item.detail ? (
           expandableReasoning ? (
-            <>
-              <span className="activity-reasoning-preview">{item.detail}</span>
-              <details className="activity-reasoning">
-                <summary>
-                  <span className="sr-only">Toggle full analysis</span>
-                </summary>
-                <p>{item.detail}</p>
-              </details>
-            </>
+            <details className="activity-reasoning">
+              <summary aria-label="Toggle full analysis">
+                <span className="activity-reasoning-preview">{item.detail}</span>
+              </summary>
+            </details>
           ) : (
             <span>{item.detail}</span>
           )
@@ -253,6 +253,134 @@ function HtmlArtifact({
   );
 }
 
+function LatestUserMessage({
+  assets,
+  branch,
+  disabled,
+  onEdit,
+  onSelectBranch,
+  text,
+}: {
+  assets: Asset[];
+  branch: ThreadBranchState;
+  disabled: boolean;
+  onEdit: (message: string) => Promise<void>;
+  onSelectBranch: (checkpointId: string) => Promise<void>;
+  text: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(text);
+  const [submitting, setSubmitting] = useState(false);
+  const branchCount = branch.options.length;
+  const currentIndex = branch.current_index;
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    const next = draft.trim();
+    if (!next || next === text.trim() || submitting) return;
+    setSubmitting(true);
+    try {
+      await onEdit(next);
+      setEditing(false);
+    } catch {
+      // The workspace reports API errors without discarding the draft.
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function selectBranch(index: number) {
+    const option = branch.options[index];
+    if (!option || submitting) return;
+    setSubmitting(true);
+    try {
+      await onSelectBranch(option.checkpoint_id);
+    } catch {
+      // The workspace reports API errors and keeps the current branch selected.
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <form className="message-edit" onSubmit={(event) => void submit(event)}>
+        <textarea
+          autoFocus
+          rows={3}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          aria-label="Edit latest message"
+        />
+        <div className="message-edit-actions">
+          <button
+            type="button"
+            onClick={() => {
+              setDraft(text);
+              setEditing(false);
+            }}
+            disabled={submitting}
+          >
+            Cancel
+          </button>
+          <button
+            className="primary"
+            type="submit"
+            disabled={!draft.trim() || draft.trim() === text.trim() || submitting}
+          >
+            Send
+          </button>
+        </div>
+      </form>
+    );
+  }
+
+  return (
+    <>
+      <div className="message-body">
+        <FriendlyText assets={assets} citations={[]} text={text} />
+      </div>
+      <div className="message-actions">
+        {branch.can_edit_latest ? (
+          <button
+            type="button"
+            className="message-icon-button"
+            aria-label="Edit latest message"
+            title="Edit latest message"
+            disabled={disabled || submitting}
+            onClick={() => setEditing(true)}
+          >
+            <PencilSimpleIcon aria-hidden="true" />
+          </button>
+        ) : null}
+        {branchCount > 1 ? (
+          <div className="message-branches" aria-label="Message branches">
+            <button
+              type="button"
+              aria-label="Previous branch"
+              disabled={disabled || submitting || currentIndex <= 0}
+              onClick={() => void selectBranch(currentIndex - 1)}
+            >
+              <CaretLeftIcon aria-hidden="true" />
+            </button>
+            <span>
+              {currentIndex + 1} / {branchCount}
+            </span>
+            <button
+              type="button"
+              aria-label="Next branch"
+              disabled={disabled || submitting || currentIndex >= branchCount - 1}
+              onClick={() => void selectBranch(currentIndex + 1)}
+            >
+              <CaretRightIcon aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
 function eventWidget(event: AgentEvent): Widget {
   const candidate = event.payload.widget;
   return (
@@ -264,22 +392,31 @@ function eventWidget(event: AgentEvent): Widget {
 
 interface TranscriptProps {
   assets: Asset[];
+  branch: ThreadBranchState;
   htmlPreview: Asset | null;
   onDownload: (asset: Asset) => Promise<void>;
+  onEditLatest: (message: string) => Promise<void>;
   onResume: (event: AgentEvent, value: unknown) => Promise<void>;
+  onSelectBranch: (checkpointId: string) => Promise<void>;
   projection: AgentProjection;
 }
 
 export function Transcript({
   assets,
+  branch,
   htmlPreview,
   onDownload,
+  onEditLatest,
   onResume,
+  onSelectBranch,
   projection,
 }: TranscriptProps) {
   const transcriptRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const messages = useMemo(() => projectMessages(projection.events), [projection.events]);
+  const latestUserMessageId = messages.findLast(
+    (message) => message.author === "You",
+  )?.id;
   const progressEvents = useMemo(
     () =>
       projection.events.filter(
@@ -372,8 +509,19 @@ export function Transcript({
                 <strong>{message.author}</strong>
                 <time>{created}</time>
               </div>
-              <div className="message-body">
-                {message.author === "LangAlpha" ? (
+              {message.author === "You" && message.id === latestUserMessageId ? (
+                <LatestUserMessage
+                  assets={assets}
+                  branch={branch}
+                  disabled={Boolean(projection.activeRunId)}
+                  key={branch.current_checkpoint_id || message.id}
+                  onEdit={onEditLatest}
+                  onSelectBranch={onSelectBranch}
+                  text={message.text}
+                />
+              ) : (
+                <div className="message-body">
+                  {message.author === "LangAlpha" ? (
                   <Suspense
                     fallback={
                       <FriendlyText
@@ -389,14 +537,15 @@ export function Transcript({
                       text={message.text}
                     />
                   </Suspense>
-                ) : (
-                  <FriendlyText
-                    assets={assets}
-                    citations={message.citations || []}
-                    text={message.text}
-                  />
-                )}
-              </div>
+                  ) : (
+                    <FriendlyText
+                      assets={assets}
+                      citations={message.citations || []}
+                      text={message.text}
+                    />
+                  )}
+                </div>
+              )}
             </article>
           </div>
         );

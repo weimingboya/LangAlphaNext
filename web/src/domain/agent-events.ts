@@ -406,6 +406,16 @@ function eventStatus(
       status: { label: "Waiting for input", mode: "idle" },
     };
   }
+  if (
+    event.type === "message.completed" &&
+    event.run_id === current.activeRunId &&
+    assistantMessageContent(event.payload).text.trim()
+  ) {
+    return {
+      activeRunId: current.activeRunId,
+      status: { label: "Analysis complete", mode: "idle" },
+    };
+  }
   if (TERMINAL_RUN_EVENTS.has(event.type)) {
     let label = "Run complete";
     if (event.type === "run.success") label = "Analysis complete";

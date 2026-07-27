@@ -1,7 +1,6 @@
 import { BriefcaseIcon } from "@phosphor-icons/react/dist/icons/Briefcase";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/icons/CaretDown";
 import { CheckIcon } from "@phosphor-icons/react/dist/icons/Check";
-import { DotsThreeVerticalIcon } from "@phosphor-icons/react/dist/icons/DotsThreeVertical";
 import { FileTextIcon } from "@phosphor-icons/react/dist/icons/FileText";
 import { FolderIcon } from "@phosphor-icons/react/dist/icons/Folder";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/icons/PencilSimple";
@@ -224,18 +223,6 @@ export function ThreadRail({
               className={projectMenuOpen ? "project-chevron open" : "project-chevron"}
               weight="bold"
             />
-          </button>
-          <button
-            type="button"
-            className="project-options-trigger"
-            aria-label="Project menu"
-            aria-controls="project-popover"
-            aria-expanded={projectMenuOpen}
-            aria-haspopup="menu"
-            onClick={openProjectMenu}
-            onKeyDown={handleProjectTriggerKeyDown}
-          >
-            <DotsThreeVerticalIcon aria-hidden="true" weight="bold" />
           </button>
         </div>
 

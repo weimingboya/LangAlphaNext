@@ -56,6 +56,23 @@ describe("AgentEvent projection", () => {
     expect(state.status.label).toBe("Analysis complete");
   });
 
+  test("a visible completed response stops visual loading while keeping the run active", () => {
+    let state = reduceAgentEvent(initialAgentProjection(), event());
+    state = reduceAgentEvent(
+      state,
+      event({
+        id: "message-completed-1",
+        type: "message.completed",
+        payload: {
+          messages: [{ id: "assistant-1", role: "assistant", content: "Final answer" }],
+        },
+      }),
+    );
+
+    expect(state.activeRunId).toBe("run-1");
+    expect(state.status).toEqual({ label: "Analysis complete", mode: "idle" });
+  });
+
   test("keeps runtime IDs without a local sequence contract", () => {
     const parsed = parseAgentEvent(event());
     expect(parsed.id).toBe("runtime-event-1");

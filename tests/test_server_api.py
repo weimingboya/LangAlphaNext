@@ -258,7 +258,9 @@ class FakeGateway:
         self.threads: dict[str, ThreadView] = {}
         self.remote_runs: dict[str, dict[str, dict]] = {}
         self.states: dict[str, dict] = {}
+        self.histories: dict[str, list[dict]] = {}
         self.submitted: list[dict] = []
+        self.updated_states: list[dict] = []
         self.client = SimpleNamespace(runs=FakeStreamRuns(self))
 
     async def healthcheck(self, assistant_id: str) -> None:
@@ -276,6 +278,7 @@ class FakeGateway:
         self.threads[thread.id] = thread
         self.remote_runs[thread.id] = {}
         self.states[thread.id] = {"values": {"messages": [], "todos": []}, "interrupts": []}
+        self.histories[thread.id] = []
         return thread
 
     async def search_threads(self, *, metadata: dict, **_: object) -> list[ThreadView]:
@@ -298,8 +301,43 @@ class FakeGateway:
     async def delete_thread(self, thread_id: str) -> None:
         del self.threads[thread_id]
 
-    async def state(self, thread_id: str) -> dict:
+    async def state(self, thread_id: str, *, checkpoint_id: str | None = None) -> dict:
+        if checkpoint_id:
+            return next(
+                state
+                for state in self.histories[thread_id]
+                if state.get("checkpoint", {}).get("checkpoint_id") == checkpoint_id
+            )
         return self.states[thread_id]
+
+    async def history(self, thread_id: str, **_: object) -> list[dict]:
+        return self.histories[thread_id]
+
+    async def update_state(
+        self,
+        thread_id: str,
+        *,
+        checkpoint: dict,
+        values: dict,
+    ) -> dict:
+        checkpoint_id = f"fork-{uuid4()}"
+        self.updated_states.append(
+            {
+                "thread_id": thread_id,
+                "checkpoint": checkpoint,
+                "values": values,
+            }
+        )
+        return {
+            "checkpoint": {
+                "thread_id": thread_id,
+                "checkpoint_ns": "",
+                "checkpoint_id": checkpoint_id,
+            }
+        }
+
+    async def run_metadata(self, thread_id: str, run_id: str) -> dict:
+        return self.remote_runs[thread_id][run_id]["metadata"]
 
     async def create(self, thread_id: str, assistant_id: str, **kwargs: object) -> dict:
         run_id = str(uuid4())
@@ -534,6 +572,87 @@ def test_native_run_strategy_metadata_and_input_assets() -> None:
     assert submitted["metadata"]["thread_id"] == thread["id"]
     assert submitted["metadata"]["turn_id"] == run["turn_id"]
     assert "/workspace/input/assets/" in submitted["input"]["messages"][0]["content"]
+
+
+def test_edit_latest_message_forks_from_its_input_checkpoint() -> None:
+    client, gateway, _ = _client()
+    thread = _thread(client)
+    original_run = client.post(
+        f"/api/threads/{thread['id']}/runs",
+        json={"message": "Original question"},
+        headers=_headers(),
+    )
+    original_run.raise_for_status()
+    run_id = original_run.json()["id"]
+    user_message = {
+        "id": "user-1",
+        "role": "user",
+        "content": "Original question",
+    }
+    input_state = {
+        "values": {"messages": [user_message], "todos": []},
+        "checkpoint": {
+            "thread_id": thread["id"],
+            "checkpoint_ns": "",
+            "checkpoint_id": "input-1",
+        },
+        "parent_checkpoint": None,
+        "metadata": {"run_id": run_id, "source": "input"},
+        "created_at": _now().isoformat(),
+        "interrupts": [],
+    }
+    final_state = {
+        "values": {
+            "messages": [
+                user_message,
+                {"id": "answer-1", "role": "assistant", "content": "Original answer"},
+            ],
+            "todos": [],
+        },
+        "checkpoint": {
+            "thread_id": thread["id"],
+            "checkpoint_ns": "",
+            "checkpoint_id": "final-1",
+        },
+        "parent_checkpoint": input_state["checkpoint"],
+        "metadata": {"run_id": run_id, "source": "loop"},
+        "created_at": _now().isoformat(),
+        "interrupts": [],
+    }
+    gateway.histories[thread["id"]] = [final_state, input_state]
+    gateway.states[thread["id"]] = final_state
+
+    edited = client.post(
+        f"/api/threads/{thread['id']}/runs",
+        json={
+            "message": "Edited question",
+            "branch_checkpoint_id": "final-1",
+            "edit_latest": True,
+        },
+        headers=_headers(),
+    )
+    edited.raise_for_status()
+
+    assert gateway.updated_states == [
+        {
+            "thread_id": thread["id"],
+            "checkpoint": input_state["checkpoint"],
+            "values": {
+                "messages": [
+                    {
+                        "id": "user-1",
+                        "role": "user",
+                        "content": "Edited question",
+                    }
+                ]
+            },
+        }
+    ]
+    submitted = gateway.submitted[-1]
+    assert submitted["input"] is None
+    assert submitted["checkpoint"]["checkpoint_id"].startswith("fork-")
+    assert submitted["metadata"]["edit_latest"] is True
+    assert submitted["metadata"]["source_run_id"] == run_id
 
 
 def test_thread_delete_cancels_runs_and_removes_assets() -> None:

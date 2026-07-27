@@ -21,6 +21,7 @@ import type {
   Project,
   Run,
   Thread,
+  ThreadBranchState,
   ThreadSnapshot,
 } from "../../domain/types";
 import type { ApiClient } from "../../shared/api/api-client";
@@ -36,6 +37,7 @@ export interface ResearchWorkspaceState {
   activeProject: Project | null;
   activeThread: Thread | null;
   assets: Asset[];
+  branch: ThreadBranchState;
   cancelRun: () => Promise<void>;
   closeDrawers: () => void;
   connectRun: (threadId: string, runId: string) => void;
@@ -45,6 +47,7 @@ export interface ResearchWorkspaceState {
   deleteProject: (project: Project) => Promise<void>;
   deleteThread: (thread: Thread) => Promise<void>;
   downloadAsset: (asset: Asset) => Promise<void>;
+  editLatestMessage: (message: string) => Promise<void>;
   filePickerOpen: boolean;
   fileQuery: string;
   htmlPreview: Asset | null;
@@ -58,6 +61,7 @@ export interface ResearchWorkspaceState {
   renameProject: (project: Project, name: string) => Promise<Project>;
   resumeInterrupt: (event: AgentEvent, value: unknown) => Promise<void>;
   selectProject: (project: Project) => Promise<void>;
+  selectBranch: (checkpointId: string) => Promise<void>;
   selectReference: (asset: Asset | null) => void;
   selectedReference: Asset | null;
   selectThread: (thread: Thread) => Promise<void>;
@@ -73,6 +77,13 @@ export interface ResearchWorkspaceState {
   uploadFile: (file: File) => Promise<Asset>;
 }
 
+const emptyBranchState = (): ThreadBranchState => ({
+  current_checkpoint_id: null,
+  current_index: 0,
+  options: [],
+  can_edit_latest: false,
+});
+
 export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState {
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
@@ -84,6 +95,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
     initialAgentProjection,
   );
   const [assets, setAssets] = useState<Asset[]>([]);
+  const [branch, setBranch] = useState<ThreadBranchState>(emptyBranchState);
   const [selectedReference, setSelectedReference] = useState<Asset | null>(null);
   const [htmlPreview, setHtmlPreview] = useState<Asset | null>(null);
   const [contextOpen, setContextOpen] = useState(() => window.innerWidth > 1180);
@@ -98,11 +110,12 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
   const activeProjectRef = useRef<Project | null>(null);
   const activeThreadRef = useRef<Thread | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
+  const branchRef = useRef<ThreadBranchState>(branch);
   const snapshotRequestIdRef = useRef(0);
   const toastTimerRef = useRef<number | null>(null);
-  const loadSnapshotRef = useRef<(threadId: string, requestId: number) => Promise<void>>(
-    async () => undefined,
-  );
+  const loadSnapshotRef = useRef<
+    (threadId: string, requestId: number, checkpointId?: string) => Promise<void>
+  >(async () => undefined);
 
   useEffect(() => {
     activeProjectRef.current = activeProject;
@@ -115,6 +128,10 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
   useEffect(() => {
     activeRunIdRef.current = projection.activeRunId;
   }, [projection.activeRunId]);
+
+  useEffect(() => {
+    branchRef.current = branch;
+  }, [branch]);
 
   const notify = useCallback((message: string) => {
     if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
@@ -205,9 +222,12 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
   );
 
   const loadSnapshot = useCallback(
-    async (threadId: string, requestId: number) => {
+    async (threadId: string, requestId: number, checkpointId?: string) => {
+      const checkpointQuery = checkpointId
+        ? `?checkpoint_id=${encodeURIComponent(checkpointId)}`
+        : "";
       const snapshot = await client.request<ThreadSnapshot>(
-        `/api/threads/${threadId}/snapshot`,
+        `/api/threads/${threadId}/snapshot${checkpointQuery}`,
       );
       if (
         requestId !== snapshotRequestIdRef.current ||
@@ -217,6 +237,8 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
       }
 
       dispatchProjection({ type: "reset" });
+      branchRef.current = snapshot.branch;
+      setBranch(snapshot.branch);
       const fallbackRunId = snapshot.runs[0]?.id || `snapshot:${threadId}`;
       const turnRuns = snapshot.runs
         .filter((run) => !run.parent_run_id)
@@ -338,6 +360,8 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
       activeRunIdRef.current = null;
       setActiveThread(thread);
       setAssets([]);
+      branchRef.current = emptyBranchState();
+      setBranch(emptyBranchState());
       setSelectedReference(null);
       setHtmlPreview(null);
       setThreadDrawerOpen(false);
@@ -371,6 +395,8 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
       setActiveThread(null);
       setThreads([]);
       setAssets([]);
+      branchRef.current = emptyBranchState();
+      setBranch(emptyBranchState());
       setSelectedReference(null);
       setHtmlPreview(null);
       setFilePickerOpen(false);
@@ -485,6 +511,8 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
         activeRunIdRef.current = null;
         setActiveThread(null);
         setAssets([]);
+        branchRef.current = emptyBranchState();
+        setBranch(emptyBranchState());
         setSelectedReference(null);
         setHtmlPreview(null);
         setFilePickerOpen(false);
@@ -531,6 +559,9 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
             message,
             strategy,
             input_asset_ids: selectedReference ? [selectedReference.id] : [],
+            branch_checkpoint_id: wasActive
+              ? null
+              : branchRef.current.current_checkpoint_id,
           }),
         }),
         renamePromise,
@@ -568,6 +599,51 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
       recordEvent,
       selectedReference,
     ],
+  );
+
+  const selectBranch = useCallback(
+    async (checkpointId: string) => {
+      const thread = activeThreadRef.current;
+      if (!thread || checkpointId === branchRef.current.current_checkpoint_id) return;
+      if (activeRunIdRef.current) {
+        throw new Error("Wait for the current response before switching branches.");
+      }
+      const requestId = snapshotRequestIdRef.current + 1;
+      snapshotRequestIdRef.current = requestId;
+      sourceRef.current?.close();
+      sourceRef.current = null;
+      await loadSnapshot(thread.id, requestId, checkpointId);
+    },
+    [loadSnapshot],
+  );
+
+  const editLatestMessage = useCallback(
+    async (rawMessage: string) => {
+      const thread = activeThreadRef.current;
+      const checkpointId = branchRef.current.current_checkpoint_id;
+      const message = rawMessage.trim();
+      if (!thread || !checkpointId || !message) return;
+      if (activeRunIdRef.current) {
+        throw new Error("Wait for the current response before editing your message.");
+      }
+      await client.request<Run>(`/api/threads/${thread.id}/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message,
+          strategy: "enqueue",
+          input_asset_ids: [],
+          branch_checkpoint_id: checkpointId,
+          edit_latest: true,
+        }),
+      });
+      const requestId = snapshotRequestIdRef.current + 1;
+      snapshotRequestIdRef.current = requestId;
+      sourceRef.current?.close();
+      sourceRef.current = null;
+      await loadSnapshot(thread.id, requestId);
+    },
+    [client, loadSnapshot],
   );
 
   const interruptRun = useCallback(
@@ -716,6 +792,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
       activeProject,
       activeThread,
       assets,
+      branch,
       cancelRun,
       closeDrawers,
       connectRun,
@@ -725,6 +802,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
       deleteProject,
       deleteThread,
       downloadAsset,
+      editLatestMessage,
       filePickerOpen,
       fileQuery,
       htmlPreview,
@@ -737,6 +815,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
       projects,
       renameProject,
       resumeInterrupt,
+      selectBranch,
       selectProject,
       selectReference: setSelectedReference,
       selectedReference,
@@ -756,6 +835,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
       activeProject,
       activeThread,
       assets,
+      branch,
       cancelRun,
       closeDrawers,
       connectRun,
@@ -765,6 +845,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
       deleteProject,
       deleteThread,
       downloadAsset,
+      editLatestMessage,
       filePickerOpen,
       fileQuery,
       htmlPreview,
@@ -777,6 +858,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
       projects,
       renameProject,
       resumeInterrupt,
+      selectBranch,
       selectProject,
       selectedReference,
       selectThread,

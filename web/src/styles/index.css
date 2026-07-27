@@ -122,8 +122,7 @@ svg {
 
 .project-switcher {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 36px;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .project-switcher button {
@@ -168,20 +167,13 @@ svg {
   font-weight: 650;
 }
 
-.project-select-trigger svg:first-child,
-.project-options-trigger svg {
+.project-select-trigger svg:first-child {
   color: var(--muted);
 }
 
 .project-switcher svg {
   width: 18px;
   height: 18px;
-}
-
-.project-options-trigger {
-  display: grid;
-  place-items: center;
-  padding: 0;
 }
 
 .project-chevron {
@@ -826,6 +818,101 @@ svg {
   line-height: 1.75;
 }
 
+.message-actions {
+  display: flex;
+  max-width: 720px;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  margin-top: 8px;
+}
+
+.message-icon-button,
+.message-branches button {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.message-icon-button:hover:not(:disabled),
+.message-branches button:hover:not(:disabled) {
+  background: #edf3f0;
+  color: var(--accent);
+}
+
+.message-icon-button svg,
+.message-branches svg {
+  width: 16px;
+  height: 16px;
+}
+
+.message-branches {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.message-branches span {
+  min-width: 38px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.message-edit {
+  max-width: 720px;
+}
+
+.message-edit textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  border: 1px solid #b9c9c2;
+  border-radius: 12px;
+  outline: none;
+  background: #fff;
+  color: #28302e;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.6;
+  padding: 11px 13px;
+}
+
+.message-edit textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgb(7 102 75 / 10%);
+}
+
+.message-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.message-edit-actions button {
+  min-width: 68px;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ink);
+}
+
+.message-edit-actions button.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
 .markdown-content > :first-child {
   margin-top: 0;
 }
@@ -1014,7 +1101,7 @@ svg {
   background: #fbfdfc;
 }
 
-.activity summary {
+.activity > summary {
   display: flex;
   min-height: 64px;
   align-items: center;
@@ -1026,11 +1113,11 @@ svg {
   font-size: 12px;
 }
 
-.activity summary::-webkit-details-marker {
+.activity > summary::-webkit-details-marker {
   display: none;
 }
 
-.activity summary::before {
+.activity > summary::before {
   display: block;
   width: 20px;
   height: 20px;
@@ -1044,19 +1131,19 @@ svg {
   line-height: 18px;
 }
 
-.activity.running summary::before {
+.activity.running > summary::before {
   border-right-color: transparent;
   content: "";
   animation: spin 0.9s linear infinite;
 }
 
-.activity.error summary::before {
+.activity.error > summary::before {
   border-color: var(--danger);
   color: var(--danger);
   content: "!";
 }
 
-.activity summary::after {
+.activity > summary::after {
   width: 7px;
   height: 7px;
   border-right: 1.5px solid currentColor;
@@ -1096,7 +1183,7 @@ svg {
   font-weight: 650;
 }
 
-.activity[open] summary::after {
+.activity[open] > summary::after {
   transform: rotate(225deg) translate(-2px, -2px);
 }
 
@@ -1191,38 +1278,51 @@ svg {
   min-width: 0;
 }
 
-.activity-reasoning-preview {
-  display: block;
-}
-
 .activity-reasoning summary {
-  width: max-content;
+  display: grid;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr) 7px;
+  align-items: center;
+  gap: 8px;
   margin-top: 3px;
-  color: var(--accent);
+  padding: 0;
+  color: var(--muted);
   cursor: pointer;
   list-style: none;
-  font-size: 11px;
-  font-weight: 620;
+  font-size: 12px;
 }
 
 .activity-reasoning summary::-webkit-details-marker {
   display: none;
 }
 
-.activity-reasoning summary::before {
-  content: "Show full analysis";
+.activity-reasoning summary::after {
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg) translateY(-2px);
+  transition: transform 140ms ease;
+  content: "";
 }
 
-.activity-reasoning[open] summary::before {
-  content: "Hide full analysis";
+.activity-reasoning[open] summary::after {
+  transform: rotate(225deg) translate(-2px, -2px);
 }
 
-.activity-reasoning p {
-  margin: 8px 0 4px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.55;
+.activity-reasoning-preview {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-reasoning[open] .activity-reasoning-preview {
+  overflow: visible;
+  text-overflow: clip;
   white-space: pre-wrap;
+  line-height: 1.55;
 }
 
 .activity-event time {

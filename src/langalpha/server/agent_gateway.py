@@ -348,8 +348,55 @@ class AgentGateway:
     async def delete_thread(self, thread_id: str) -> None:
         await self.client.threads.delete(thread_id)
 
-    async def state(self, thread_id: str) -> dict[str, Any]:
-        return as_dict(await self.client.threads.get_state(thread_id))
+    async def state(
+        self,
+        thread_id: str,
+        *,
+        checkpoint_id: str | None = None,
+    ) -> dict[str, Any]:
+        checkpoint = (
+            {
+                "thread_id": thread_id,
+                "checkpoint_ns": "",
+                "checkpoint_id": checkpoint_id,
+            }
+            if checkpoint_id
+            else None
+        )
+        return as_dict(
+            await self.client.threads.get_state(thread_id, checkpoint=checkpoint)
+        )
+
+    async def history(
+        self,
+        thread_id: str,
+        *,
+        limit: int = 1_000,
+    ) -> list[dict[str, Any]]:
+        return [
+            as_dict(state)
+            for state in await self.client.threads.get_history(thread_id, limit=limit)
+        ]
+
+    async def update_state(
+        self,
+        thread_id: str,
+        *,
+        checkpoint: dict[str, Any],
+        values: dict[str, Any],
+    ) -> dict[str, Any]:
+        return as_dict(
+            await self.client.threads.update_state(
+                thread_id,
+                values,
+                checkpoint=checkpoint,
+            )
+        )
+
+    async def run_metadata(self, thread_id: str, run_id: str) -> dict[str, Any]:
+        remote = as_dict(await self.client.runs.get(thread_id, run_id))
+        metadata = remote.get("metadata")
+        return metadata if isinstance(metadata, dict) else {}
 
     async def run(
         self,
