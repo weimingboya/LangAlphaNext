@@ -294,6 +294,12 @@ jobs:
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |
+          vercel curl "${{ steps.vercel.outputs.url }}/" \
+            --fail \
+            --silent \
+            --show-error \
+            --retry 5 \
+            --retry-all-errors > /dev/null
           vercel curl "${{ steps.vercel.outputs.url }}/health" \
             --fail \
             --silent \
