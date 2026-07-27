@@ -51,6 +51,7 @@ export function ResearchWorkspace({ client, onSignOut }: ResearchWorkspaceProps)
             await workspace.createProject(name);
           } catch (reason) {
             report(reason);
+            throw reason;
           }
         }}
         onDelete={workspace.deleteThread}
@@ -59,6 +60,7 @@ export function ResearchWorkspace({ client, onSignOut }: ResearchWorkspaceProps)
             await workspace.deleteProject(project);
           } catch (reason) {
             report(reason);
+            throw reason;
           }
         }}
         onRenameProject={async (project, name) => {
@@ -66,6 +68,7 @@ export function ResearchWorkspace({ client, onSignOut }: ResearchWorkspaceProps)
             await workspace.renameProject(project, name);
           } catch (reason) {
             report(reason);
+            throw reason;
           }
         }}
         onSelectProject={async (project) => {
@@ -73,6 +76,7 @@ export function ResearchWorkspace({ client, onSignOut }: ResearchWorkspaceProps)
             await workspace.selectProject(project);
           } catch (reason) {
             report(reason);
+            throw reason;
           }
         }}
         onSignOut={onSignOut}

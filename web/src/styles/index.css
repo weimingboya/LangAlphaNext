@@ -80,7 +80,7 @@ svg {
   overflow: auto;
   border-right: 1px solid var(--line);
   background: var(--bg);
-  padding: 28px 16px;
+  padding: 26px 14px 18px;
 }
 
 .rail-brand-row,
@@ -93,7 +93,7 @@ svg {
 
 .rail-brand-row {
   justify-content: space-between;
-  padding: 0 10px;
+  padding: 0 8px;
 }
 
 .thread-rail h1 {
@@ -105,95 +105,351 @@ svg {
 }
 
 .thread-rail h2 {
-  margin: 38px 12px 11px;
+  margin: 28px 8px 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 24px;
   color: var(--muted);
   font-size: 12px;
   font-weight: 650;
-  letter-spacing: 0.035em;
+  letter-spacing: 0.025em;
+}
+
+.project-control {
+  position: relative;
+  z-index: 8;
+  margin-top: 20px;
 }
 
 .project-switcher {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 36px;
   gap: 8px;
-  margin: 2px 0 8px;
 }
 
-.project-switcher select,
-.project-switcher button,
-.project-actions button {
+.project-switcher button {
+  min-width: 0;
+  min-height: 40px;
   border: 1px solid var(--line);
   border-radius: 9px;
   background: var(--bg);
   color: var(--ink);
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    box-shadow 120ms ease;
 }
 
-.project-switcher select {
-  min-width: 0;
-  padding: 8px 10px;
-  font: inherit;
+.project-switcher button:hover,
+.project-switcher button:focus-visible,
+.project-switcher button[aria-expanded="true"] {
+  border-color: var(--line-strong);
+  background: var(--soft);
+}
+
+.project-switcher button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  outline-offset: 2px;
+}
+
+.project-select-trigger {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 9px;
+  padding: 0 11px;
+  text-align: left;
+}
+
+.project-select-trigger > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
   font-weight: 650;
 }
 
-.project-switcher button {
-  display: grid;
-  place-items: center;
+.project-select-trigger svg:first-child,
+.project-options-trigger svg {
+  color: var(--muted);
 }
 
 .project-switcher svg {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
 }
 
-.project-actions {
+.project-options-trigger {
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.project-chevron {
+  width: 13px !important;
+  height: 13px !important;
+  transition: transform 140ms ease;
+}
+
+.project-chevron.open {
+  transform: rotate(180deg);
+}
+
+.project-popover {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  margin-top: 7px;
+  background: var(--bg);
+  box-shadow:
+    0 14px 32px rgb(17 34 29 / 10%),
+    0 2px 8px rgb(17 34 29 / 6%);
+  animation: project-popover-in 120ms ease-out;
+}
+
+@keyframes project-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.project-menu {
+  padding: 6px;
+}
+
+.project-list {
+  display: grid;
+  max-height: 184px;
+  overflow: auto;
+}
+
+.project-menu button {
+  display: grid;
+  width: 100%;
+  min-height: 38px;
+  grid-template-columns: 18px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 9px;
+  border: 0;
+  border-radius: 7px;
+  padding: 0 9px;
+  background: transparent;
+  color: #303936;
+  text-align: left;
+  font-size: 13px;
+  transition:
+    background 100ms ease,
+    color 100ms ease;
+}
+
+.project-menu button:hover,
+.project-menu button:focus-visible {
+  outline: 0;
+  background: var(--soft);
+}
+
+.project-menu button[aria-checked="true"] {
+  background: var(--mint);
+  color: var(--accent-dark);
+  font-weight: 630;
+}
+
+.project-menu button > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-menu button svg {
+  width: 17px;
+  height: 17px;
+}
+
+.project-active-check {
+  color: var(--accent);
+}
+
+.project-menu-separator {
+  height: 1px;
+  margin: 6px -6px;
+  background: var(--line);
+}
+
+.project-menu .project-menu-delete {
+  color: var(--danger);
+}
+
+.project-editor,
+.project-delete-confirm {
+  padding: 13px;
+}
+
+.project-editor-heading {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
+  font-size: 13px;
 }
 
-.project-actions button {
+.project-editor-heading > button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
   border: 0;
-  padding: 3px 0;
+  border-radius: 6px;
   background: transparent;
   color: var(--muted);
-  font-size: 0.72rem;
 }
 
-.project-actions .project-delete {
+.project-editor-heading > button:hover,
+.project-editor-heading > button:focus-visible {
+  outline: 0;
+  background: var(--soft);
+  color: var(--ink);
+}
+
+.project-editor-heading svg {
+  width: 15px;
+  height: 15px;
+}
+
+.project-editor form {
+  display: grid;
+  gap: 7px;
+}
+
+.project-editor label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 620;
+}
+
+.project-editor input {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  padding: 0 9px;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.project-editor input:focus {
+  border-color: var(--accent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.project-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  margin-top: 7px;
+}
+
+.project-editor-actions button {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0 11px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.project-editor-actions button:hover,
+.project-editor-actions button:focus-visible {
+  border-color: var(--line-strong);
+  outline: 0;
+  background: var(--soft);
+  color: var(--ink);
+}
+
+.project-editor-actions .project-editor-submit {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: white;
+}
+
+.project-editor-actions .project-editor-submit:hover,
+.project-editor-actions .project-editor-submit:focus-visible {
+  border-color: var(--accent-dark);
+  background: var(--accent-dark);
+  color: white;
+}
+
+.project-delete-confirm > svg {
+  width: 22px;
+  height: 22px;
   color: var(--danger);
+}
+
+.project-delete-confirm h3 {
+  margin: 9px 0 4px;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.project-delete-confirm p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.project-editor-actions .project-delete-submit {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: white;
+}
+
+.project-editor-actions .project-delete-submit:hover,
+.project-editor-actions .project-delete-submit:focus-visible {
+  border-color: #853030;
+  background: #853030;
+  color: white;
 }
 
 .new-thread {
   display: flex;
-  width: calc(100% - 16px);
-  min-height: 44px;
+  width: 100%;
+  min-height: 42px;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 8px;
   border: 1px solid var(--accent);
   border-radius: 8px;
-  margin: 28px 8px 0;
+  margin: 16px 0 0;
   background: var(--accent);
   color: white;
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 640;
   transition:
     background 140ms ease,
-    color 140ms ease;
+    border-color 140ms ease,
+    box-shadow 140ms ease;
 }
 
 .new-thread:hover,
 .new-thread:focus-visible {
+  border-color: var(--accent-dark);
+  outline: 0;
   background: var(--accent-dark);
+  box-shadow: 0 4px 12px rgb(7 91 70 / 14%);
 }
 
 .new-thread svg {
-  width: 19px;
-  height: 19px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-width: 1.7;
+  width: 17px;
+  height: 17px;
 }
 
 #thread-list {
@@ -210,20 +466,30 @@ svg {
 
 .thread-row {
   position: relative;
+  display: grid;
   width: 100%;
   min-width: 0;
-  min-height: 48px;
+  min-height: 44px;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
   overflow: hidden;
   border: 0;
   border-radius: 7px;
   background: transparent;
   color: #303936;
-  padding: 0 42px;
+  padding: 0 39px 0 11px;
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 14px;
+  font-size: 13px;
   transition: background 120ms ease;
+}
+
+.thread-row > svg {
+  width: 17px;
+  height: 17px;
+  color: var(--muted);
 }
 
 .thread-title {
@@ -231,28 +497,6 @@ svg {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.thread-row::before {
-  position: absolute;
-  top: 15px;
-  left: 15px;
-  width: 15px;
-  height: 15px;
-  border: 1.5px solid currentColor;
-  border-radius: 50%;
-  content: "";
-}
-
-.thread-row::after {
-  position: absolute;
-  top: 26px;
-  left: 15px;
-  width: 5px;
-  height: 5px;
-  border-bottom: 1.5px solid currentColor;
-  transform: rotate(-35deg);
-  content: "";
 }
 
 .thread-row:hover {
@@ -264,27 +508,22 @@ svg {
   color: var(--accent-dark);
 }
 
-.thread-row.active > span,
 .thread-row.active {
   font-weight: 610;
-}
-
-.thread-row.active::selection {
-  background: transparent;
-}
-
-.thread-row.active::marker {
-  color: transparent;
 }
 
 .thread-row.active {
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
+.thread-row.active > svg {
+  color: var(--accent);
+}
+
 .thread-delete {
   position: absolute;
-  top: 7px;
-  right: 6px;
+  top: 5px;
+  right: 4px;
   display: grid;
   width: 34px;
   height: 34px;
@@ -302,13 +541,8 @@ svg {
 }
 
 .thread-delete svg {
-  width: 17px;
-  height: 17px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.7;
+  width: 16px;
+  height: 16px;
 }
 
 .thread-item:hover .thread-delete,
@@ -2042,13 +2276,31 @@ svg {
 }
 
 .rail-sign-out {
+  display: flex;
   width: 100%;
-  min-height: 44px;
+  min-height: 52px;
   flex: 0 0 auto;
+  align-items: flex-end;
   justify-content: flex-start;
+  gap: 9px;
+  border-radius: 0;
   margin-top: auto;
-  padding: 0 12px;
+  padding: 16px 8px 1px;
+  box-shadow: 0 -1px var(--line);
   text-align: left;
+  font-size: 13px;
+  font-weight: 580;
+}
+
+.rail-sign-out:hover,
+.rail-sign-out:focus-visible {
+  outline: 0;
+  color: var(--accent);
+}
+
+.rail-sign-out svg {
+  width: 18px;
+  height: 18px;
 }
 
 .loading-mark {
