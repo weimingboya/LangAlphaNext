@@ -109,6 +109,68 @@ def test_dataset_materializer_reads_prior_tool_message_without_record_copy(
     assert files[result["path"]].count("\n") == 2
 
 
+def test_dataset_materializer_reads_filesystem_offloaded_tool_message(
+    monkeypatch,
+) -> None:
+    files: dict[str, str] = {}
+    tool_call_id = "market-call"
+    offload_path = f"/workspace/artifacts/large_tool_results/{tool_call_id}"
+    offloaded_content = json.dumps(
+        {
+            "records": [
+                {"symbol": "AAPL", "price": 200.0},
+                {"symbol": "MSFT", "price": 500.0},
+            ]
+        }
+    ).encode()
+
+    class Backend:
+        def execute(self, _: str):
+            return SimpleNamespace(exit_code=0, output="")
+
+        def download_files(self, paths: list[str]):
+            assert paths == [offload_path]
+            return [
+                SimpleNamespace(
+                    path=offload_path,
+                    content=offloaded_content,
+                    error=None,
+                )
+            ]
+
+        def write(self, path: str, content: str):
+            files[path] = content
+            return SimpleNamespace(error=None)
+
+    backend = Backend()
+    monkeypatch.setattr(module, "get_context_daytona_backend", lambda: backend)
+    runtime = _runtime()
+    runtime.state["messages"] = [
+        SimpleNamespace(
+            tool_call_id=tool_call_id,
+            content=(
+                "Tool result too large, the result of this tool call "
+                f"{tool_call_id} was saved in the filesystem at this path: "
+                f"{offload_path}\n\nPreview is not JSON."
+            ),
+        )
+    ]
+
+    result = json.loads(
+        module.materialize_dataset.func(
+            logical_operation_id="market-call",
+            name="quotes",
+            source="get_market_quotes",
+            source_tool_call_id=tool_call_id,
+            runtime=runtime,
+            file_format="jsonl",
+        )
+    )
+
+    assert result["row_count"] == 2
+    assert files[result["path"]].count("\n") == 2
+
+
 def test_dataset_materializer_falls_back_to_unique_record_tool_message(
     monkeypatch,
 ) -> None:

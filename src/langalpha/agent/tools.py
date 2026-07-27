@@ -9,6 +9,7 @@ import posixpath
 import re
 from typing import Any, Literal
 
+from deepagents.backends.utils import sanitize_tool_call_id
 from langchain.tools import ToolRuntime, tool
 from langgraph.config import get_stream_writer
 from langgraph.types import interrupt
@@ -113,6 +114,26 @@ def _require_context(runtime: ToolRuntime[RunContext, object]) -> RunContext:
     return context
 
 
+def _offloaded_tool_message_content(content: str, tool_call_id: str) -> str | None:
+    path = (
+        "/workspace/artifacts/large_tool_results/"
+        f"{sanitize_tool_call_id(tool_call_id)}"
+    )
+    header = (
+        "Tool result too large, the result of this tool call "
+        f"{tool_call_id} was saved in the filesystem at this path: {path}\n"
+    )
+    if not content.startswith(header):
+        return None
+    response = get_context_daytona_backend().download_files([path])[0]
+    if response.error or response.content is None:
+        raise FileNotFoundError(f"offloaded tool result is unavailable: {path}")
+    try:
+        return bytes(response.content).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("offloaded source ToolMessage is not UTF-8 JSON") from exc
+
+
 def _tool_message_records(
     runtime: ToolRuntime[RunContext, object],
     tool_call_id: str,
@@ -149,8 +170,19 @@ def _tool_message_records(
             parsed = json.loads(content)
         except json.JSONDecodeError:
             if message_call_id == tool_call_id:
-                raise ValueError("source ToolMessage does not contain valid JSON") from None
-            continue
+                offloaded_content = _offloaded_tool_message_content(content, tool_call_id)
+                if offloaded_content is None:
+                    raise ValueError(
+                        "source ToolMessage does not contain valid JSON"
+                    ) from None
+                try:
+                    parsed = json.loads(offloaded_content)
+                except json.JSONDecodeError:
+                    raise ValueError(
+                        "offloaded source ToolMessage does not contain valid JSON"
+                    ) from None
+            else:
+                continue
         candidate = parsed.get("records") if isinstance(parsed, dict) else parsed
         if not isinstance(candidate, list) or not all(isinstance(row, dict) for row in candidate):
             if message_call_id == tool_call_id:
