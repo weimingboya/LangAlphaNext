@@ -131,6 +131,46 @@ def _event_messages(value: Any) -> list[dict[str, Any]]:
     return messages
 
 
+def _latest_todos(value: Any) -> list[dict[str, str]] | None:
+    latest: list[dict[str, str]] | None = None
+
+    def visit(current: Any) -> None:
+        nonlocal latest
+        if isinstance(current, list):
+            for item in current:
+                visit(item)
+            return
+        record = _record(current)
+        if record is None:
+            return
+        raw_todos = record.get("todos")
+        if isinstance(raw_todos, list):
+            projected: list[dict[str, str]] = []
+            for item in raw_todos:
+                todo = _record(item)
+                if todo is None:
+                    continue
+                content = todo.get("content")
+                status = todo.get("status")
+                if (
+                    isinstance(content, str)
+                    and content
+                    and status in {"pending", "in_progress", "completed"}
+                ):
+                    projected.append({"content": content, "status": status})
+            latest = projected
+        for nested in record.values():
+            visit(nested)
+
+    visit(value)
+    return latest
+
+
+def normalize_todos(value: Any) -> list[dict[str, str]]:
+    """Return the latest browser-safe Deep Agents todo list in a value tree."""
+    return _latest_todos(value) or []
+
+
 def project_public_events(source: AgentEvent) -> list[AgentEvent]:
     """Return only stable, browser-safe product events for one upstream frame."""
     if source.type in {"message.delta", "message.completed"}:
@@ -146,6 +186,17 @@ def project_public_events(source: AgentEvent) -> list[AgentEvent]:
         ]
     if source.type in _PASSTHROUGH_EVENTS:
         return [source]
+    if source.type == "state.updated":
+        todos = _latest_todos(source.payload)
+        if todos is not None:
+            return [
+                source.model_copy(
+                    update={
+                        "type": "todo.updated",
+                        "payload": {"todos": todos},
+                    }
+                )
+            ]
     if source.type == "run.error":
         message = source.payload.get("message") or source.payload.get("error")
         return [

@@ -128,13 +128,28 @@ function ActivityRow({ item }: { item: ActivityItem }) {
     hour: "2-digit",
     minute: "2-digit",
   });
+  const expandableReasoning = item.kind === "reasoning" && Boolean(item.detail);
   return (
-    <li className={`activity-event ${item.status}`}>
+    <li className={`activity-event ${item.status}${item.kind ? ` ${item.kind}` : ""}`}>
       <span className="activity-event-mark" aria-hidden="true" />
-      <span className="activity-event-copy">
+      <div className="activity-event-copy">
         <strong>{item.title}</strong>
-        {item.detail ? <span>{item.detail}</span> : null}
-      </span>
+        {item.detail ? (
+          expandableReasoning ? (
+            <>
+              <span className="activity-reasoning-preview">{item.detail}</span>
+              <details className="activity-reasoning">
+                <summary>
+                  <span className="sr-only">Toggle full analysis</span>
+                </summary>
+                <p>{item.detail}</p>
+              </details>
+            </>
+          ) : (
+            <span>{item.detail}</span>
+          )
+        ) : null}
+      </div>
       <time>{created}</time>
     </li>
   );
@@ -160,12 +175,6 @@ function InterruptCard({
   const [answer, setAnswer] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const value = interruptValue(event);
-  const steps = Array.isArray(value.steps)
-    ? value.steps.filter((step): step is Record<string, unknown> =>
-        Boolean(step && typeof step === "object"),
-      )
-    : [];
-  const isPlan = value.kind === "plan";
 
   async function resume(next: unknown) {
     setSubmitting(true);
@@ -183,53 +192,20 @@ function InterruptCard({
 
   return (
     <section className="interrupt-card">
-      <h3>{isPlan ? "Plan approval" : "LangAlpha needs input"}</h3>
-      <p>{String(value.question || value.goal || "Review the request before continuing.")}</p>
-      {isPlan ? (
-        <>
-          {steps.length ? (
-            <ol>
-              {steps.map((step, index) => (
-                <li key={index}>
-                  {String(step.title || `Step ${index + 1}`)}:{" "}
-                  {String(step.description || "")}
-                </li>
-              ))}
-            </ol>
-          ) : null}
-          <div className="interrupt-actions">
-            <button
-              className="primary"
-              type="button"
-              disabled={submitting}
-              onClick={() => void resume({ decision: "approve" })}
-            >
-              Approve
-            </button>
-            <button
-              className="secondary"
-              type="button"
-              disabled={submitting}
-              onClick={() => void resume({ decision: "reject" })}
-            >
-              Reject
-            </button>
-          </div>
-        </>
-      ) : (
-        <form className="interrupt-answer" onSubmit={submit}>
-          <textarea
-            required
-            rows={3}
-            value={answer}
-            onChange={(event) => setAnswer(event.target.value)}
-            placeholder="Your answer…"
-          />
-          <button className="primary" type="submit" disabled={submitting}>
-            Continue
-          </button>
-        </form>
-      )}
+      <h3>LangAlpha needs input</h3>
+      <p>{String(value.question || "Please provide the missing information.")}</p>
+      <form className="interrupt-answer" onSubmit={submit}>
+        <textarea
+          required
+          rows={3}
+          value={answer}
+          onChange={(event) => setAnswer(event.target.value)}
+          placeholder="Your answer…"
+        />
+        <button className="primary" type="submit" disabled={submitting}>
+          Continue
+        </button>
+      </form>
     </section>
   );
 }

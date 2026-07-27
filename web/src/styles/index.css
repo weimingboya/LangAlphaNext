@@ -836,6 +836,15 @@ svg {
   padding: 6px 0;
 }
 
+.activity-event.reasoning {
+  align-items: start;
+}
+
+.activity-event.reasoning .activity-event-mark,
+.activity-event.reasoning time {
+  margin-top: 10px;
+}
+
 .activity-event:not(:last-child)::after {
   position: absolute;
   top: 36px;
@@ -891,6 +900,44 @@ svg {
   color: var(--muted);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.activity-reasoning {
+  min-width: 0;
+}
+
+.activity-reasoning-preview {
+  display: block;
+}
+
+.activity-reasoning summary {
+  width: max-content;
+  margin-top: 3px;
+  color: var(--accent);
+  cursor: pointer;
+  list-style: none;
+  font-size: 11px;
+  font-weight: 620;
+}
+
+.activity-reasoning summary::-webkit-details-marker {
+  display: none;
+}
+
+.activity-reasoning summary::before {
+  content: "Show full analysis";
+}
+
+.activity-reasoning[open] summary::before {
+  content: "Hide full analysis";
+}
+
+.activity-reasoning p {
+  margin: 8px 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
 }
 
 .activity-event time {
@@ -1484,6 +1531,67 @@ svg {
   margin: -4px 0 10px;
   color: var(--accent);
   font-size: 11px;
+}
+
+.plan-progress {
+  flex: 0 0 auto;
+  border-radius: 99px;
+  margin: -4px 0 10px;
+  background: var(--mint);
+  color: var(--accent-dark);
+  padding: 3px 7px;
+  font-size: 10px;
+  font-weight: 680;
+}
+
+.plan-list {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plan-item {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  border-radius: 6px;
+  color: var(--muted);
+  padding: 7px 6px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.plan-item.in_progress {
+  background: var(--mint);
+  color: var(--accent-dark);
+  font-weight: 610;
+}
+
+.plan-item.completed {
+  color: var(--subtle);
+}
+
+.plan-mark {
+  display: block;
+  width: 13px;
+  height: 13px;
+  border: 1.5px solid #9aa7a3;
+  border-radius: 50%;
+  margin-top: 2px;
+}
+
+.plan-item.in_progress .plan-mark {
+  border: 4px solid var(--accent);
+  animation: pulse 1.4s ease-out infinite;
+}
+
+.plan-item.completed .plan-mark {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: inset 0 0 0 3px white;
 }
 
 .context-empty {

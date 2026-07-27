@@ -47,7 +47,6 @@ def test_factory_is_single_harness_entry_and_exposes_expected_tools(
         "fred_search_series",
         "fred_get_observations",
         "ask_user",
-        "submit_plan",
         "start_async_task",
         "check_async_task",
         "update_async_task",
@@ -55,6 +54,7 @@ def test_factory_is_single_harness_entry_and_exposes_expected_tools(
         "list_async_tasks",
     } <= names
     assert "task" not in names
+    assert "submit_plan" not in names
     assert "market_get_snapshots" not in names
 
     researcher_tools = graphs.research_graph.get_graph().nodes["tools"].data

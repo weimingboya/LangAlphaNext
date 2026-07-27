@@ -259,7 +259,6 @@ def test_lazy_backend_resolves_only_on_operation(monkeypatch) -> None:
         return Resolved()
 
     monkeypatch.setattr(module, "get_daytona_backend_for_thread", resolve)
-    monkeypatch.setattr(module, "_persist_sandbox_binding", lambda *_: None)
     monkeypatch.setattr(
         module.ContextDaytonaSandbox,
         "_context",
@@ -343,7 +342,6 @@ def test_execute_and_upload_emit_binding_and_asset_events(monkeypatch) -> None:
         "get_daytona_backend_for_thread",
         lambda **_: resolved,
     )
-    monkeypatch.setattr(module, "_persist_sandbox_binding", lambda *_: None)
     monkeypatch.setattr(module, "_asset_store", lambda: Store())
     monkeypatch.setattr(
         module.ContextDaytonaSandbox,
@@ -371,45 +369,6 @@ def test_execute_and_upload_emit_binding_and_asset_events(monkeypatch) -> None:
     lazy.write("/workspace/artifacts/summary.md", "summary")
     assert emitted[-1]["sandbox_path"] == "/workspace/artifacts/summary.md"
     assert published[-1]["content"] == b"summary"
-
-
-def test_sandbox_binding_is_persisted_by_the_agent_runtime(monkeypatch) -> None:
-    updates: list[tuple[str, dict]] = []
-    metadata = {
-        "owner_id": "owner",
-        "project_id": "project",
-        "sandbox_id": None,
-    }
-    threads = SimpleNamespace(
-        get=lambda thread_id: {"thread_id": thread_id, "metadata": metadata},
-        update=lambda thread_id, **kwargs: updates.append((thread_id, kwargs["metadata"])),
-    )
-    monkeypatch.setattr(
-        module,
-        "get_sync_client",
-        lambda **_: SimpleNamespace(threads=threads),
-    )
-    module.clear_backend_cache()
-    context = RunContext(
-        project_id="project",
-        owner_id="owner",
-        thread_id="thread",
-        turn_id="turn",
-    )
-
-    module._persist_sandbox_binding(context, "sandbox-id")
-    module._persist_sandbox_binding(context, "sandbox-id")
-
-    assert updates == [
-        (
-            "thread",
-            {
-                "owner_id": "owner",
-                "project_id": "project",
-                "sandbox_id": "sandbox-id",
-            },
-        )
-    ]
 
 
 def test_daytona_creation_is_private_blocked_and_binding_is_strict(monkeypatch) -> None:

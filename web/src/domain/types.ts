@@ -94,7 +94,7 @@ export interface ThreadSnapshot {
   runs: Run[];
   messages: JsonObject[];
   activities?: AgentEvent[];
-  todos: JsonObject[];
+  todos: TodoItem[];
   interrupts: JsonValue[];
   widgets: Widget[];
   usage: UsageSummary;
@@ -141,6 +141,13 @@ export interface ActivityItem {
   detail?: string;
   status: "running" | "complete" | "error" | "info";
   created_at: string;
+}
+
+export type TodoStatus = "pending" | "in_progress" | "completed";
+
+export interface TodoItem {
+  content: string;
+  status: TodoStatus;
 }
 
 export interface ProjectedMessage extends AgentEvent {

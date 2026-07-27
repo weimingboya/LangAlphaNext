@@ -8,6 +8,7 @@ import type {
   JsonObject,
   MessageContent,
   ProjectedMessage,
+  TodoItem,
   UsageSummary,
   Widget,
 } from "./types";
@@ -49,9 +50,16 @@ function standaloneActivity(event: AgentEvent): ActivityItem | null {
     };
   }
   if (event.type === "todo.updated") {
+    const todos = Array.isArray(event.payload.todos) ? event.payload.todos : [];
+    const completed = todos.filter(
+      (todo) => isRecord(todo) && todo.status === "completed",
+    ).length;
     return {
-      id: event.id,
+      id: `todo:${event.run_id}`,
       title: "Update research plan",
+      ...(todos.length
+        ? { detail: `${completed}/${todos.length} complete` }
+        : {}),
       status: "complete",
       created_at: event.created_at,
     };
@@ -143,6 +151,27 @@ export function projectActivity(events: AgentEvent[]): ActivityItem[] {
     if (standalone) merge(standalone);
   }
   return [...items.values()];
+}
+
+export function projectTodos(events: AgentEvent[]): TodoItem[] {
+  let todos: TodoItem[] = [];
+  for (const event of events) {
+    if (event.type !== "todo.updated" || !Array.isArray(event.payload.todos)) {
+      continue;
+    }
+    todos = event.payload.todos.flatMap((value) => {
+      if (!isRecord(value) || typeof value.content !== "string") return [];
+      if (
+        value.status !== "pending" &&
+        value.status !== "in_progress" &&
+        value.status !== "completed"
+      ) {
+        return [];
+      }
+      return [{ content: value.content, status: value.status }];
+    });
+  }
+  return todos;
 }
 
 function requireString(value: unknown, field: string): string {

@@ -4,6 +4,19 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      deploy_supabase:
+        description: Deploy Supabase migrations
+        type: boolean
+        default: false
+      deploy_langgraph:
+        description: Deploy LangGraph Agent Server
+        type: boolean
+        default: false
+      deploy_vercel:
+        description: Deploy Vercel application
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -13,14 +26,61 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  detect-changes:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    environment: production
-    env:
-      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
-      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+    outputs:
+      supabase: ${{ steps.filter.outputs.supabase }}
+      langgraph: ${{ steps.filter.outputs.langgraph }}
+      vercel: ${{ steps.filter.outputs.vercel }}
+    steps:
+      - uses: actions/checkout@v6
 
+      - name: Detect deployment targets
+        if: github.event_name == 'push'
+        id: filter
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            supabase:
+              - 'supabase/migrations/**'
+            langgraph:
+              - 'langgraph.json'
+              - 'src/langalpha/__init__.py'
+              - 'src/langalpha/agent/**'
+              - 'src/langalpha/backends/**'
+              - 'src/langalpha/capabilities/**'
+              - 'src/langalpha/integrations/**'
+              - 'src/langalpha/resources/**'
+              - 'src/langalpha/config.py'
+              - 'src/langalpha/domain/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+            vercel:
+              - 'vercel.json'
+              - 'api/**'
+              - 'web/**'
+              - 'src/langalpha/__init__.py'
+              - 'src/langalpha/server/**'
+              - 'src/langalpha/assets/**'
+              - 'src/langalpha/security/**'
+              - 'src/langalpha/domain/**'
+              - 'src/langalpha/config.py'
+              - 'src/langalpha/backends/__init__.py'
+              - 'src/langalpha/backends/daytona.py'
+              - 'pyproject.toml'
+              - 'uv.lock'
+
+  verify:
+    needs: detect-changes
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+        (inputs.deploy_supabase || inputs.deploy_langgraph || inputs.deploy_vercel)) ||
+      (github.event_name == 'push' &&
+        (needs.detect-changes.outputs.supabase == 'true' ||
+          needs.detect-changes.outputs.langgraph == 'true' ||
+          needs.detect-changes.outputs.vercel == 'true'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
 
@@ -47,6 +107,23 @@ jobs:
           npm --prefix web run build
           uv run langgraph validate
 
+  deploy-supabase:
+    needs: [detect-changes, verify]
+    if: >-
+      always() &&
+      needs.detect-changes.result == 'success' &&
+      needs.verify.result == 'success' &&
+      (
+        (github.event_name == 'workflow_dispatch' && inputs.deploy_supabase) ||
+        (github.event_name == 'push' &&
+          needs.detect-changes.outputs.supabase == 'true')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - uses: actions/checkout@v6
+
       - uses: supabase/setup-cli@v2
         with:
           version: 2.109.1
@@ -59,6 +136,34 @@ jobs:
         run: |
           supabase link --project-ref "$SUPABASE_PROJECT_ID"
           supabase db push --linked
+
+  deploy-langgraph:
+    needs: [detect-changes, verify, deploy-supabase]
+    if: >-
+      always() &&
+      needs.detect-changes.result == 'success' &&
+      needs.verify.result == 'success' &&
+      (needs.deploy-supabase.result == 'success' ||
+        needs.deploy-supabase.result == 'skipped') &&
+      (
+        (github.event_name == 'workflow_dispatch' && inputs.deploy_langgraph) ||
+        (github.event_name == 'push' &&
+          needs.detect-changes.outputs.langgraph == 'true')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install Python and dependencies
+        run: |
+          uv python install 3.12
+          uv sync --frozen --all-groups
 
       - name: Prepare LangGraph deployment environment
         env:
@@ -122,6 +227,44 @@ jobs:
             --deployment-type prod \
             --remote \
             --no-input
+
+  deploy-vercel:
+    needs: [detect-changes, verify, deploy-supabase, deploy-langgraph]
+    if: >-
+      always() &&
+      needs.detect-changes.result == 'success' &&
+      needs.verify.result == 'success' &&
+      (needs.deploy-supabase.result == 'success' ||
+        needs.deploy-supabase.result == 'skipped') &&
+      (needs.deploy-langgraph.result == 'success' ||
+        needs.deploy-langgraph.result == 'skipped') &&
+      (
+        (github.event_name == 'workflow_dispatch' && inputs.deploy_vercel) ||
+        (github.event_name == 'push' &&
+          needs.detect-changes.outputs.vercel == 'true')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install web dependencies
+        run: npm --prefix web ci
+
+      - name: Install Python
+        run: uv python install 3.12
 
       - name: Install Vercel CLI
         run: npm install --global vercel@57.0.0

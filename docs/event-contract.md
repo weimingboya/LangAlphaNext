@@ -30,6 +30,7 @@ Stable product types are:
 
 - `message.delta`, `message.completed`
 - `activity.updated`
+- `todo.updated`
 - `sandbox.bound`, `asset.ready`, `asset.failed`, `widget.ready`
 - `interrupt.requested`
 - `run.success`, `run.error`, `run.interrupted`, `run.cancelled`
@@ -46,12 +47,22 @@ deduplicates IDs; it does not invent a durable cursor.
 
 `activity.updated` is a lightweight BFF projection used by the progress UI. Its
 payload has a stable activity `id`, `kind` (`reasoning`, `tool`, or `subagent`),
-`title`, `status`, and an optional short `detail`. Reasoning entries contain
-only the model-provided reasoning summary. Tool results include a bounded
-summary only for high-value research outputs; other tools simply transition to
-complete. The first public frame projected from each upstream frame carries the
-upstream SSE cursor; additional derived frames omit `id:`. `Last-Event-ID`
-therefore always remains an Agent Server cursor.
+`title`, `status`, and an optional `detail`. Reasoning entries contain the
+complete model-provided reasoning summary; the browser visually truncates the
+collapsed preview and exposes the same text through an expandable disclosure.
+Tool arguments are projected through a small user-facing allowlist, such as a
+filename and line range for `read_file`. Tool results include a bounded summary
+only for high-value research outputs; other tools simply transition to
+complete.
+
+`todo.updated` contains only the latest Deep Agents `todos` state:
+`content` plus `pending`, `in_progress`, or `completed` status. Each update
+replaces the previous list. Raw `write_todos` calls are not duplicated in the
+activity timeline.
+
+The first public frame projected from each upstream frame carries the upstream
+SSE cursor; additional derived frames omit `id:`. `Last-Event-ID` therefore
+always remains an Agent Server cursor.
 
 `asset.ready` is emitted only after Storage upload and Asset-row persistence
 succeed. `sandbox.bound` is informational: the Agent host itself persists the

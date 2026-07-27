@@ -11,14 +11,20 @@ from langalpha.domain.models import AgentEvent
 _TOOL_LABELS = {
     "ask_user": "Request clarification",
     "check_async_task": "Check research task",
+    "edit_file": "Edit file",
+    "execute": "Run calculation",
     "fred_get_observations": "Fetch macroeconomic observations",
     "fred_search_series": "Search FRED series",
+    "glob": "Find files",
+    "grep": "Search files",
     "inspect_asset": "Inspect workspace file",
+    "ls": "List files",
     "market_get_bars": "Fetch market price history",
     "market_get_corporate_actions": "Fetch corporate actions",
     "market_get_snapshots": "Fetch market snapshots",
     "market_resolve_instrument": "Resolve market instrument",
     "materialize_dataset": "Prepare research dataset",
+    "read_file": "Read file",
     "sec_get_company_facts": "Fetch SEC company facts",
     "sec_get_filing": "Read SEC filing",
     "sec_list_filings": "List SEC filings",
@@ -28,7 +34,7 @@ _TOOL_LABELS = {
     "start_async_task": "Start research task",
     "list_async_tasks": "Review research tasks",
     "cancel_async_task": "Cancel research task",
-    "submit_plan": "Submit research plan",
+    "write_file": "Create file",
 }
 
 _SUBAGENT_TOOLS = {
@@ -66,6 +72,7 @@ _DETAIL_KEYS = (
     "subagent_type",
     "description",
     "task_id",
+    "file_path",
     "path",
     "filename",
 )
@@ -82,22 +89,18 @@ def _trim(value: str, limit: int = 420) -> str:
     return f"{compact[: limit - 1].rstrip()}…"
 
 
-def _summary_text(value: Any) -> str:
+def _reasoning_text(value: Any) -> str:
     if isinstance(value, str):
-        return value
+        return value.strip()
     if isinstance(value, list):
-        return " ".join(filter(None, (_summary_text(item) for item in value)))
+        return "\n\n".join(text for item in value if (text := _reasoning_text(item)))
     if not isinstance(value, dict):
         return ""
-    return " ".join(
-        filter(
-            None,
-            (
-                _summary_text(value.get(key))
-                for key in ("reasoning", "summary", "summary_text", "text", "content")
-                if key in value
-            ),
-        )
+    return "\n\n".join(
+        text
+        for key in ("reasoning", "summary", "summary_text", "text", "content")
+        if key in value
+        if (text := _reasoning_text(value.get(key)))
     )
 
 
@@ -143,7 +146,16 @@ def _tool_arguments(value: dict[str, Any]) -> dict[str, Any]:
     return candidate if isinstance(candidate, dict) else {}
 
 
-def _compact_tool_detail(arguments: dict[str, Any]) -> str | None:
+def _compact_tool_detail(tool_name: str, arguments: dict[str, Any]) -> str | None:
+    file_path = arguments.get("file_path")
+    if tool_name == "read_file" and isinstance(file_path, str) and file_path:
+        details = [Path(file_path).name]
+        offset = arguments.get("offset")
+        limit = arguments.get("limit")
+        if isinstance(offset, int) and isinstance(limit, int) and limit > 0:
+            details.append(f"lines {offset + 1}-{offset + limit}")
+        return _trim(" · ".join(details), 180)
+
     details: list[str] = []
     for key in _DETAIL_KEYS:
         value = arguments.get(key)
@@ -151,7 +163,7 @@ def _compact_tool_detail(arguments: dict[str, Any]) -> str | None:
             continue
         if isinstance(value, list):
             rendered = ", ".join(str(item) for item in value[:3])
-        elif key in {"path", "filename"}:
+        elif key in {"file_path", "path", "filename"}:
             rendered = Path(str(value)).name
         else:
             rendered = str(value)
@@ -259,6 +271,8 @@ def _tool_candidate(
     fallback_identity: str,
 ) -> dict[str, Any] | None:
     name = _tool_name(value)
+    if name == "write_todos":
+        return None
     call_id = _tool_call_id(value) or fallback_identity
     if not name and not call_id:
         return None
@@ -276,7 +290,7 @@ def _tool_candidate(
         "status": status,
         "tool_name": name,
     }
-    detail = _compact_tool_detail(_tool_arguments(value))
+    detail = _compact_tool_detail(name, _tool_arguments(value))
     if detail:
         candidate["detail"] = detail
     return candidate
@@ -287,8 +301,10 @@ def _tool_result_candidate(
     run_id: str,
     value: dict[str, Any],
     fallback_identity: str,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     name = _tool_name(value)
+    if name == "write_todos":
+        return None
     call_id = _tool_call_id(value) or fallback_identity
     content = value.get("content") if "content" in value else value.get("result")
     is_subagent = name in _SUBAGENT_TOOLS
@@ -327,7 +343,7 @@ def _reasoning_candidate(
     block_index: int,
     source_type: str,
 ) -> dict[str, Any] | None:
-    text = _trim(_summary_text(value))
+    text = _reasoning_text(value)
     if not text:
         return None
     identity = str(value.get("id") or f"{message_identity}:{block_index}")

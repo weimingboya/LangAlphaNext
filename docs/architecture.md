@@ -65,12 +65,15 @@ The BFF creates Agent Server runs with:
 - a `RunContext` containing only trusted identity, Thread, turn, input Asset IDs
   and the expected Daytona sandbox.
 
-HITL uses native LangGraph checkpoint interrupts and `Command(resume=...)`.
+HITL uses native LangGraph checkpoint interrupts and `Command(resume=...)` for
+missing user input. Complex work uses the built-in Deep Agents `todos` state
+for planning and progress instead of a separate plan-approval flow.
 Cancellation delegates to Agent Server. There is no custom steering middleware.
 
 The UI follows `runs.join_stream` through an authenticated SSE proxy. Reload
 builds one snapshot from Agent Server state and run history plus the Supabase
-Asset registry.
+Asset registry. Normalized todo updates drive the Plan section in the existing
+Context rail.
 
 ## Research capabilities
 

@@ -99,3 +99,46 @@ def test_public_projection_omits_tool_messages_and_reasoning_only_messages() -> 
             "content": "Research Apple",
         }
     ]
+
+
+def test_public_projection_emits_normalized_todo_state_updates() -> None:
+    source = AgentEvent(
+        id="event-1",
+        thread_id="thread-1",
+        run_id="run-1",
+        type="state.updated",
+        payload={
+            "tools": {
+                "todos": [
+                    {"content": "Collect filings", "status": "completed", "private": "omit"},
+                    {"content": "Calculate growth", "status": "in_progress"},
+                    {"content": "Invalid", "status": "blocked"},
+                ]
+            }
+        },
+    )
+
+    [projected] = project_public_events(source)
+
+    assert projected.type == "todo.updated"
+    assert projected.payload == {
+        "todos": [
+            {"content": "Collect filings", "status": "completed"},
+            {"content": "Calculate growth", "status": "in_progress"},
+        ]
+    }
+
+
+def test_public_projection_can_clear_the_todo_list() -> None:
+    source = AgentEvent(
+        id="event-1",
+        thread_id="thread-1",
+        run_id="run-1",
+        type="state.updated",
+        payload={"tools": {"todos": []}},
+    )
+
+    [projected] = project_public_events(source)
+
+    assert projected.type == "todo.updated"
+    assert projected.payload == {"todos": []}

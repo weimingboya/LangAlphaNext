@@ -87,6 +87,83 @@ def test_projects_high_value_tool_result_summary() -> None:
     assert projected.payload["detail"] == "2 filings"
 
 
+def test_projects_read_file_name_and_line_range() -> None:
+    source = source_event(
+        payload={
+            "value": [
+                {
+                    "type": "AIMessageChunk",
+                    "tool_calls": [
+                        {
+                            "id": "call-read",
+                            "name": "read_file",
+                            "args": {
+                                "file_path": "/workspace/input/assets/42/annual-report.pdf",
+                                "offset": 100,
+                                "limit": 50,
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+
+    [projected] = project_activity_events(source)
+
+    assert projected.payload["title"] == "Read file"
+    assert projected.payload["detail"] == "annual-report.pdf · lines 101-150"
+
+
+def test_reasoning_summary_is_not_truncated_by_the_protocol() -> None:
+    reasoning = "A" * 600
+    source = source_event(
+        event_type="message.completed",
+        payload={
+            "value": [
+                {
+                    "type": "AIMessage",
+                    "id": "message-1",
+                    "content": [
+                        {
+                            "type": "reasoning",
+                            "id": "reasoning-1",
+                            "summary_text": reasoning,
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+
+    [projected] = project_activity_events(source)
+
+    assert projected.payload["detail"] == reasoning
+
+
+def test_write_todos_is_represented_by_todo_state_instead_of_tool_activity() -> None:
+    source = source_event(
+        payload={
+            "value": [
+                {
+                    "type": "AIMessageChunk",
+                    "tool_calls": [
+                        {
+                            "id": "call-todos",
+                            "name": "write_todos",
+                            "args": {
+                                "todos": [{"content": "Collect filings", "status": "in_progress"}]
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+
+    assert project_activity_events(source) == []
+
+
 def test_ignores_encrypted_reasoning_without_summary() -> None:
     source = source_event(
         payload={

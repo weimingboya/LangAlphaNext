@@ -33,7 +33,6 @@ from deepagents.backends.sandbox import BaseSandbox
 from langchain_daytona import DaytonaSandbox
 from langgraph.config import get_stream_writer
 from langgraph.runtime import get_runtime
-from langgraph_sdk import get_sync_client
 
 from langalpha.agent.context import RunContext
 from langalpha.assets.store import SupabaseAssetStore, safe_filename
@@ -43,7 +42,6 @@ _LOCK = threading.RLock()
 _CLIENT: Daytona | None = None
 _RESOLVED_BACKENDS: dict[tuple[str, str], WorkspaceMappedDaytonaSandbox] = {}
 _BOUND_EVENTS: set[tuple[str, str]] = set()
-_PERSISTED_BINDINGS: set[tuple[str, str]] = set()
 _HYDRATED_INPUTS: set[tuple[str, str, tuple[str, ...]]] = set()
 _RESOURCE_ROOT = Path(__file__).resolve().parents[1] / "resources"
 _ARTIFACTS_ROOT = "/workspace/artifacts"
@@ -97,32 +95,6 @@ def _emit_custom(payload: dict[str, object]) -> None:
     except RuntimeError:
         return
     writer(payload)
-
-
-def _persist_sandbox_binding(context: RunContext, sandbox_id: str) -> None:
-    marker = (context.thread_id, sandbox_id)
-    with _LOCK:
-        if marker in _PERSISTED_BINDINGS:
-            return
-    client = get_sync_client(url=get_settings().langgraph_server_url)
-    remote = client.threads.get(context.thread_id)
-    metadata = remote.get("metadata") if isinstance(remote, dict) else None
-    metadata = metadata if isinstance(metadata, dict) else {}
-    if (
-        metadata.get("owner_id") != context.owner_id
-        or metadata.get("project_id") != context.project_id
-    ):
-        raise RuntimeError("LangGraph thread metadata does not match RunContext")
-    current = metadata.get("sandbox_id")
-    if current not in {None, sandbox_id}:
-        raise RuntimeError("LangGraph thread is bound to another Daytona sandbox")
-    if current is None:
-        client.threads.update(
-            context.thread_id,
-            metadata={**metadata, "sandbox_id": sandbox_id},
-        )
-    with _LOCK:
-        _PERSISTED_BINDINGS.add(marker)
 
 
 def list_artifact_manifest(
@@ -492,7 +464,6 @@ class ContextDaytonaSandbox(BaseSandbox):
             project_id=context.project_id,
             expected_sandbox_id=getattr(context, "expected_sandbox_id", None),
         )
-        _persist_sandbox_binding(context, backend.id)
         marker = (context.turn_id, backend.id)
         with _LOCK:
             first_for_run = marker not in _BOUND_EVENTS
@@ -765,7 +736,6 @@ def delete_daytona_sandbox(
         _BOUND_EVENTS.difference_update(
             marker for marker in _BOUND_EVENTS if marker[1] == sandbox_id
         )
-        _PERSISTED_BINDINGS.discard((thread_id, sandbox_id))
         _HYDRATED_INPUTS.difference_update(
             marker for marker in _HYDRATED_INPUTS if marker[0] == thread_id
         )
@@ -778,7 +748,6 @@ def clear_backend_cache() -> None:
     with _LOCK:
         _RESOLVED_BACKENDS.clear()
         _BOUND_EVENTS.clear()
-        _PERSISTED_BINDINGS.clear()
         _HYDRATED_INPUTS.clear()
         _asset_store.cache_clear()
         _CLIENT = None

@@ -8,6 +8,7 @@ import {
   initialAgentProjection,
   parseAgentEvent,
   projectActivity,
+  projectTodos,
   reduceAgentEvent,
 } from "./agent-events";
 import {
@@ -167,6 +168,59 @@ describe("Agent output rendering", () => {
         created_at: "2026-01-01T00:00:00Z",
       },
     ]);
+  });
+
+  test("projects the latest normalized todo list and progress activity", () => {
+    const events = [
+      event({
+        id: "todos-1",
+        type: "todo.updated",
+        payload: {
+          todos: [
+            { content: "Collect filings", status: "completed" },
+            { content: "Calculate growth", status: "in_progress" },
+          ],
+        },
+      }),
+    ];
+
+    expect(projectTodos(events)).toEqual([
+      { content: "Collect filings", status: "completed" },
+      { content: "Calculate growth", status: "in_progress" },
+    ]);
+    expect(projectActivity(events)).toEqual([
+      {
+        id: "todo:run-1",
+        title: "Update research plan",
+        detail: "1/2 complete",
+        status: "complete",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ]);
+  });
+
+  test("replaces todo state and ignores invalid todo values", () => {
+    expect(
+      projectTodos([
+        event({
+          id: "todos-1",
+          type: "todo.updated",
+          payload: {
+            todos: [{ content: "Old task", status: "in_progress" }],
+          },
+        }),
+        event({
+          id: "todos-2",
+          type: "todo.updated",
+          payload: {
+            todos: [
+              { content: "Done", status: "completed" },
+              { content: "Invalid", status: "blocked" },
+            ],
+          },
+        }),
+      ]),
+    ).toEqual([{ content: "Done", status: "completed" }]);
   });
 
   test("keeps one activity row when a subagent receives its task ID", () => {

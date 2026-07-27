@@ -16,7 +16,7 @@ from langalpha.domain.models import (
     UsageSummary,
 )
 from langalpha.security.redaction import redact_text, redact_value
-from langalpha.server.public_projection import public_messages
+from langalpha.server.public_projection import normalize_todos, public_messages
 
 _REMOTE_STATUS: dict[str, RunStatus] = {
     "pending": "pending",
@@ -147,10 +147,7 @@ def normalize_messages(state: object) -> list[dict[str, Any]]:
 def state_todos(state: object) -> list[dict[str, Any]]:
     values = as_dict(state).get("values")
     values = values if isinstance(values, dict) else {}
-    todos = values.get("todos")
-    if not isinstance(todos, list):
-        return []
-    return [redact_value(as_dict(todo)) for todo in todos]
+    return normalize_todos(values)
 
 
 def state_widgets(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

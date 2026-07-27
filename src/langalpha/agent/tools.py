@@ -347,5 +347,4 @@ HOST_TOOLS = [
     inspect_asset,
     show_widget,
     ask_user,
-    submit_plan,
 ]

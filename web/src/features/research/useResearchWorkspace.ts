@@ -140,6 +140,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
         "message.delta",
         "message.completed",
         "activity.updated",
+        "todo.updated",
         "sandbox.bound",
         "asset.ready",
         "asset.failed",
@@ -238,7 +239,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
             threadId,
             fallbackRunId,
             "todo.updated",
-            { todos: snapshot.todos },
+            asPayload({ todos: snapshot.todos }),
             `snapshot:todos:${threadId}`,
           ),
         );

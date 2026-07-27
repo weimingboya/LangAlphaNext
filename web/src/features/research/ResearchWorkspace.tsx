@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 
+import { projectTodos } from "../../domain/agent-events";
 import type { ApiClient } from "../../shared/api/api-client";
 import { ContextPanel } from "../assets/ContextPanel";
 import { ThreadRail } from "../threads/ThreadRail";
@@ -17,6 +18,10 @@ export function ResearchWorkspace({ client, onSignOut }: ResearchWorkspaceProps)
   const workspace = useResearchWorkspace(client);
   const citations = useMemo(
     () => collectCitations(workspace.projection.events),
+    [workspace.projection.events],
+  );
+  const todos = useMemo(
+    () => projectTodos(workspace.projection.events),
     [workspace.projection.events],
   );
   const className = [
@@ -117,6 +122,7 @@ export function ResearchWorkspace({ client, onSignOut }: ResearchWorkspaceProps)
           workspace.setContextOpen(false);
         }}
         onReference={() => workspace.openFilePicker()}
+        todos={todos}
       />
 
       <button

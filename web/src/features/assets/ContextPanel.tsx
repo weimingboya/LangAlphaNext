@@ -1,5 +1,5 @@
 import { CloseIcon, FileIcon } from "../../shared/ui/icons";
-import type { Asset, Citation } from "../../domain/types";
+import type { Asset, Citation, TodoItem } from "../../domain/types";
 
 interface ContextPanelProps {
   assets: Asset[];
@@ -8,6 +8,7 @@ interface ContextPanelProps {
   onDownload: (asset: Asset) => void;
   onOpenHtml: (asset: Asset) => void;
   onReference: () => void;
+  todos: TodoItem[];
 }
 
 function artifactKind(asset: Asset): string {
@@ -35,7 +36,9 @@ export function ContextPanel({
   onDownload,
   onOpenHtml,
   onReference,
+  todos,
 }: ContextPanelProps) {
+  const completedTodos = todos.filter((todo) => todo.status === "completed").length;
   return (
     <aside className="context-rail" id="context-panel" aria-label="Research context">
       <header className="context-header">
@@ -49,6 +52,31 @@ export function ContextPanel({
           <CloseIcon />
         </button>
       </header>
+      {todos.length ? (
+        <section className="context-section plan-section" aria-labelledby="plan-heading">
+          <div className="section-heading">
+            <h3 id="plan-heading">Plan</h3>
+            <span className="plan-progress">
+              {completedTodos}/{todos.length}
+            </span>
+          </div>
+          <ol className="plan-list">
+            {todos.map((todo, index) => (
+              <li className={`plan-item ${todo.status}`} key={`${todo.content}:${index}`}>
+                <span className="plan-mark" aria-hidden="true" />
+                <span>{todo.content}</span>
+                <span className="sr-only">
+                  {todo.status === "in_progress"
+                    ? "In progress"
+                    : todo.status === "completed"
+                      ? "Completed"
+                      : "Pending"}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
       <section className="context-section">
         <h3>Sources</h3>
         <div className="context-list">
