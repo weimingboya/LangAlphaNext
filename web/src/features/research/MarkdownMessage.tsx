@@ -1,10 +1,20 @@
-import Markdown, { type Components } from "react-markdown";
+import Markdown, {
+  type Components,
+  type Options as MarkdownOptions,
+} from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import "katex/dist/katex.min.css";
 
 import { fileReferenceSegments } from "../../domain/message-references";
 import type { Asset, Citation } from "../../domain/types";
 
-const MARKDOWN_PLUGINS = [remarkGfm];
+const REMARK_PLUGINS: NonNullable<MarkdownOptions["remarkPlugins"]> = [
+  remarkGfm,
+  [remarkMath, { singleDollarTextMath: false }],
+];
+const REHYPE_PLUGINS = [rehypeKatex];
 
 function safeExternalUrl(value: string): string | null {
   try {
@@ -78,7 +88,8 @@ export function MarkdownMessage({
       <div className="markdown-content">
         <Markdown
           components={MARKDOWN_COMPONENTS}
-          remarkPlugins={MARKDOWN_PLUGINS}
+          rehypePlugins={REHYPE_PLUGINS}
+          remarkPlugins={REMARK_PLUGINS}
           skipHtml
         >
           {markdownWithFriendlyFiles(text, assets)}

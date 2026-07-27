@@ -174,5 +174,14 @@ Paid external checks:
 make external-test
 ```
 
+Agent Harness evaluation:
+
+```bash
+make eval
+```
+
+See [evaluation.md](docs/evaluation.md) for the fixture dataset, metrics, and
+experiment workflow.
+
 See [architecture.md](docs/architecture.md) and
 [event-contract.md](docs/event-contract.md).

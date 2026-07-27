@@ -6,6 +6,7 @@ from fastapi.responses import Response
 
 from langalpha.backends.daytona import delete_daytona_sandbox
 from langalpha.domain.models import ThreadCreate, ThreadPatch, ThreadView
+from langalpha.server.async_task_lifecycle import cancel_child_tasks
 from langalpha.server.dependencies import ServicesDep, UserDep, remote_status
 
 router = APIRouter(prefix="/api/threads")
@@ -22,6 +23,7 @@ async def create_thread(
         "schema_version": _THREAD_SCHEMA_VERSION,
         "project_id": services.settings.app_project_id,
         "owner_id": user.id,
+        "thread_kind": "main",
         "title": body.title,
         "sandbox_id": None,
     }
@@ -40,12 +42,16 @@ async def create_thread(
 @router.get("", response_model=list[ThreadView])
 async def list_threads(user: UserDep, services: ServicesDep) -> list[ThreadView]:
     try:
-        return await services.gateway.search_threads(
+        threads = await services.gateway.search_threads(
             metadata={
                 "project_id": services.settings.app_project_id,
                 "owner_id": user.id,
-            }
+            },
+            limit=100,
         )
+        return [
+            thread for thread in threads if thread.metadata.get("thread_kind") != "async_subagent"
+        ]
     except Exception as exc:
         raise HTTPException(
             status_code=502,
@@ -91,6 +97,13 @@ async def delete_thread(
         for run in runs:
             if run.status in {"pending", "running"}:
                 await services.gateway.cancel(thread.id, run.id)
+        await cancel_child_tasks(
+            services.gateway,
+            project_id=services.settings.app_project_id,
+            owner_id=user.id,
+            parent_thread_id=thread.id,
+            delete_threads=True,
+        )
         thread_assets = await asyncio.to_thread(
             services.asset_store.list_assets,
             owner_id=user.id,

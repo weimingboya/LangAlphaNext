@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable
-from hashlib import sha256
-from threading import Lock
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
@@ -50,20 +47,12 @@ def count_web_search_calls(value: Any) -> int:
     return len(seen) + anonymous
 
 
-def _scope_key(request: ModelRequest[Any]) -> str:
-    context = getattr(request.runtime, "context", None)
-    turn_id = getattr(context, "turn_id", None)
-    if turn_id:
-        return str(turn_id)
-    for message in reversed(request.messages):
-        if getattr(message, "type", "") != "human":
-            continue
-        identifier = getattr(message, "id", None)
-        if identifier:
-            return str(identifier)
-        content = str(getattr(message, "content", ""))
-        return sha256(content.encode("utf-8")).hexdigest()
-    return f"runtime:{id(request.runtime)}"
+def _current_turn_messages(messages: list[Any]) -> list[Any]:
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if getattr(message, "type", "") == "human":
+            return messages[index + 1 :]
+    return messages
 
 
 def _without_web_search(request: ModelRequest[Any]) -> ModelRequest[Any]:
@@ -80,40 +69,23 @@ class OpenAIWebSearchBudgetMiddleware(AgentMiddleware):
 
     def __init__(self, max_calls: int) -> None:
         self.max_calls = max_calls
-        self._counts: OrderedDict[str, int] = OrderedDict()
-        self._lock = Lock()
 
-    def _before(self, request: ModelRequest[Any]) -> tuple[str, ModelRequest[Any]]:
-        key = _scope_key(request)
-        with self._lock:
-            current = self._counts.get(key, 0)
-            if key in self._counts:
-                self._counts.move_to_end(key)
-        if current >= self.max_calls:
-            request = _without_web_search(request)
-        return key, request
-
-    def _after(self, key: str, response: ModelResponse[Any]) -> ModelResponse[Any]:
-        used = sum(count_web_search_calls(message) for message in response.result)
-        with self._lock:
-            self._counts[key] = self._counts.get(key, 0) + used
-            self._counts.move_to_end(key)
-            while len(self._counts) > 2_000:
-                self._counts.popitem(last=False)
-        return response
+    def _bounded(self, request: ModelRequest[Any]) -> ModelRequest[Any]:
+        used = sum(
+            count_web_search_calls(message) for message in _current_turn_messages(request.messages)
+        )
+        return _without_web_search(request) if used >= self.max_calls else request
 
     def wrap_model_call(
         self,
         request: ModelRequest[Any],
         handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
     ) -> ModelResponse[Any]:
-        key, bounded_request = self._before(request)
-        return self._after(key, handler(bounded_request))
+        return handler(self._bounded(request))
 
     async def awrap_model_call(
         self,
         request: ModelRequest[Any],
         handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
     ) -> ModelResponse[Any]:
-        key, bounded_request = self._before(request)
-        return self._after(key, await handler(bounded_request))
+        return await handler(self._bounded(request))

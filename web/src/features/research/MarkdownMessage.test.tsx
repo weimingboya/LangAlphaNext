@@ -67,4 +67,35 @@ describe("MarkdownMessage", () => {
     expect(html).toContain('href="https://www.sec.gov/example"');
     expect(html).toContain("SEC filing");
   });
+
+  test("renders inline and display math with KaTeX", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownMessage
+        assets={[]}
+        citations={[]}
+        text={[
+          "The ratio is $$289.57 \\div 30.35 \\approx 9.5\\text{倍}$$.",
+          "",
+          "$$",
+          "\\frac{289.57}{30.35} \\approx 9.5",
+          "$$",
+        ].join("\n")}
+      />,
+    );
+    expect(html).toContain('class="katex"');
+    expect(html).toContain('class="katex-display"');
+    expect(html).toContain("289.57");
+  });
+
+  test("keeps financial dollar amounts as text", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownMessage
+        assets={[]}
+        citations={[]}
+        text="Revenue rose from $10B to $12B."
+      />,
+    );
+    expect(html).toContain("Revenue rose from $10B to $12B.");
+    expect(html).not.toContain('class="katex"');
+  });
 });

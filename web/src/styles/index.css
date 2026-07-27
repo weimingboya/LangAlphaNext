@@ -666,6 +666,12 @@ svg {
   accent-color: var(--accent);
 }
 
+.markdown-content .katex-display {
+  margin: 1rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 .message-sources {
   display: flex;
   align-items: baseline;

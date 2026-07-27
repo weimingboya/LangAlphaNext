@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -6,12 +7,17 @@ from deepagents.middleware.async_subagents import (
     AsyncSubAgent,
     AsyncSubAgentMiddleware,
     CheckAsyncTaskSchema,
+    StartAsyncTaskSchema,
 )
 from langchain.tools import ToolRuntime
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import StructuredTool
 from langgraph.types import Command
 from langgraph_sdk import get_client, get_sync_client
+
+from langalpha.agent.context import RunContext
+
+logger = logging.getLogger(__name__)
 
 
 def _resolved_headers(spec: AsyncSubAgent) -> dict[str, str]:
@@ -91,6 +97,30 @@ class CompactAsyncSubAgentMiddleware(AsyncSubAgentMiddleware):
         ) -> str | Command:
             return await self._acheck_async_task(task_id, runtime)
 
+        def start_async_task(
+            description: str,
+            subagent_type: str,
+            runtime: ToolRuntime,
+        ) -> str | Command:
+            return self._start_async_task(description, subagent_type, runtime)
+
+        async def astart_async_task(
+            description: str,
+            subagent_type: str,
+            runtime: ToolRuntime,
+        ) -> str | Command:
+            return await self._astart_async_task(description, subagent_type, runtime)
+
+        compact_start = StructuredTool.from_function(
+            func=start_async_task,
+            coroutine=astart_async_task,
+            name="start_async_task",
+            description=next(
+                tool.description for tool in self.tools if tool.name == "start_async_task"
+            ),
+            infer_schema=False,
+            args_schema=StartAsyncTaskSchema,
+        )
         compact_check = StructuredTool.from_function(
             func=check_async_task,
             coroutine=acheck_async_task,
@@ -103,8 +133,175 @@ class CompactAsyncSubAgentMiddleware(AsyncSubAgentMiddleware):
             args_schema=CheckAsyncTaskSchema,
         )
         self.tools = [
-            compact_check if tool.name == "check_async_task" else tool for tool in self.tools
+            (
+                compact_start
+                if tool.name == "start_async_task"
+                else compact_check
+                if tool.name == "check_async_task"
+                else tool
+            )
+            for tool in self.tools
         ]
+
+    @staticmethod
+    def _launch_context(
+        description: str,
+        subagent_type: str,
+        runtime: ToolRuntime,
+    ) -> tuple[RunContext, dict[str, Any]] | str:
+        context = getattr(runtime, "context", None)
+        if not isinstance(context, RunContext):
+            return "Async research requires a server-issued RunContext."
+        metadata = {
+            "schema_version": 1,
+            "project_id": context.project_id,
+            "owner_id": context.owner_id,
+            "parent_thread_id": context.thread_id,
+            "parent_turn_id": context.turn_id,
+            "thread_kind": "async_subagent",
+            "agent_name": subagent_type,
+            "title": description[:200],
+        }
+        return context, metadata
+
+    @staticmethod
+    def _child_context(context: RunContext, thread_id: str) -> dict[str, Any]:
+        return {
+            "project_id": context.project_id,
+            "owner_id": context.owner_id,
+            "thread_id": thread_id,
+            "turn_id": context.turn_id,
+            "input_asset_ids": [],
+            "expected_sandbox_id": None,
+        }
+
+    @staticmethod
+    def _launch_command(
+        *,
+        context: RunContext,
+        description: str,
+        subagent_type: str,
+        thread_id: str,
+        run_id: str,
+        tool_call_id: str | None,
+    ) -> Command:
+        now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        task = {
+            "task_id": thread_id,
+            "agent_name": subagent_type,
+            "thread_id": thread_id,
+            "run_id": run_id,
+            "status": "running",
+            "description": description,
+            "parent_thread_id": context.thread_id,
+            "parent_turn_id": context.turn_id,
+            "created_at": now,
+            "last_checked_at": now,
+            "last_updated_at": now,
+        }
+        return Command(
+            update={
+                "messages": [
+                    ToolMessage(
+                        f"Launched async subagent. task_id: {thread_id}",
+                        tool_call_id=tool_call_id,
+                    )
+                ],
+                "async_tasks": {thread_id: task},
+            }
+        )
+
+    def _start_async_task(
+        self,
+        description: str,
+        subagent_type: str,
+        runtime: ToolRuntime,
+    ) -> str | Command:
+        spec = self._agent_map.get(subagent_type)
+        if spec is None:
+            return f"Unknown async subagent type: {subagent_type!r}"
+        resolved = self._launch_context(description, subagent_type, runtime)
+        if isinstance(resolved, str):
+            return resolved
+        context, metadata = resolved
+        if spec.get("url") is None:
+            return "In-process async subagents require async invocation."
+        client = get_sync_client(
+            url=spec.get("url"),
+            headers=_resolved_headers(spec),
+        )
+        thread_id = ""
+        try:
+            thread = client.threads.create(metadata=metadata)
+            thread_id = str(thread["thread_id"])
+            run = client.runs.create(
+                thread_id=thread_id,
+                assistant_id=spec["graph_id"],
+                input={"messages": [{"role": "user", "content": description}]},
+                metadata={**metadata, "thread_id": thread_id, "turn_id": context.turn_id},
+                context=self._child_context(context, thread_id),
+            )
+        except Exception as exc:
+            if thread_id:
+                try:
+                    client.threads.delete(thread_id)
+                except Exception:
+                    logger.exception("Failed to clean up async task thread %s", thread_id)
+            logger.warning("Failed to launch async subagent %s: %s", subagent_type, exc)
+            return f"Failed to launch async subagent '{subagent_type}'."
+        return self._launch_command(
+            context=context,
+            description=description,
+            subagent_type=subagent_type,
+            thread_id=thread_id,
+            run_id=str(run["run_id"]),
+            tool_call_id=runtime.tool_call_id,
+        )
+
+    async def _astart_async_task(
+        self,
+        description: str,
+        subagent_type: str,
+        runtime: ToolRuntime,
+    ) -> str | Command:
+        spec = self._agent_map.get(subagent_type)
+        if spec is None:
+            return f"Unknown async subagent type: {subagent_type!r}"
+        resolved = self._launch_context(description, subagent_type, runtime)
+        if isinstance(resolved, str):
+            return resolved
+        context, metadata = resolved
+        client = get_client(
+            url=spec.get("url"),
+            headers=_resolved_headers(spec),
+        )
+        thread_id = ""
+        try:
+            thread = await client.threads.create(metadata=metadata)
+            thread_id = str(thread["thread_id"])
+            run = await client.runs.create(
+                thread_id=thread_id,
+                assistant_id=spec["graph_id"],
+                input={"messages": [{"role": "user", "content": description}]},
+                metadata={**metadata, "thread_id": thread_id, "turn_id": context.turn_id},
+                context=self._child_context(context, thread_id),
+            )
+        except Exception as exc:
+            if thread_id:
+                try:
+                    await client.threads.delete(thread_id)
+                except Exception:
+                    logger.exception("Failed to clean up async task thread %s", thread_id)
+            logger.warning("Failed to launch async subagent %s: %s", subagent_type, exc)
+            return f"Failed to launch async subagent '{subagent_type}'."
+        return self._launch_command(
+            context=context,
+            description=description,
+            subagent_type=subagent_type,
+            thread_id=thread_id,
+            run_id=str(run["run_id"]),
+            tool_call_id=runtime.tool_call_id,
+        )
 
     @staticmethod
     def _tracked_task(task_id: str, runtime: ToolRuntime) -> dict[str, Any] | str:

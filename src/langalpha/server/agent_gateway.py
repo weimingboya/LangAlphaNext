@@ -16,6 +16,7 @@ from langalpha.domain.models import (
     UsageSummary,
 )
 from langalpha.security.redaction import redact_text, redact_value
+from langalpha.server.public_projection import public_messages
 
 _REMOTE_STATUS: dict[str, RunStatus] = {
     "pending": "pending",
@@ -114,7 +115,7 @@ def thread_view(remote: object) -> ThreadView:
     )
 
 
-def normalize_messages(state: object) -> list[dict[str, Any]]:
+def state_messages(state: object) -> list[dict[str, Any]]:
     values = as_dict(state).get("values")
     values = values if isinstance(values, dict) else {}
     messages = values.get("messages")
@@ -137,6 +138,10 @@ def normalize_messages(state: object) -> list[dict[str, Any]]:
             }
         )
     return normalized
+
+
+def normalize_messages(state: object) -> list[dict[str, Any]]:
+    return public_messages(state_messages(state))
 
 
 def state_todos(state: object) -> list[dict[str, Any]]:

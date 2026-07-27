@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from typing import Annotated
 from uuid import uuid4
@@ -8,22 +9,58 @@ from fastapi.responses import Response, StreamingResponse
 
 from langalpha.assets.store import safe_filename
 from langalpha.domain.models import AgentEvent, ResumeRun, RunCreate, RunView, ThreadSnapshot
+from langalpha.server.activity_projection import project_activity_events
 from langalpha.server.agent_gateway import (
     normalize_messages,
     normalize_stream_part,
     run_view,
     state_interrupts,
+    state_messages,
     state_todos,
     state_widgets,
     summarize_usage,
 )
+from langalpha.server.async_task_lifecycle import cancel_child_tasks
 from langalpha.server.dependencies import ServicesDep, UserDep, remote_status
+from langalpha.server.public_projection import project_public_events
 
 router = APIRouter(prefix="/api/threads/{thread_id}")
+logger = logging.getLogger(__name__)
 
 
-def event_frame(event: AgentEvent) -> bytes:
-    return (f"id: {event.id}\nevent: {event.type}\ndata: {event.model_dump_json()}\n\n").encode()
+def event_frame(event: AgentEvent, *, include_cursor: bool = True) -> bytes:
+    cursor = f"id: {event.id}\n" if include_cursor else ""
+    return f"{cursor}event: {event.type}\ndata: {event.model_dump_json()}\n\n".encode()
+
+
+def snapshot_activities(
+    *,
+    thread_id: str,
+    messages: list[dict],
+    runs: list[RunView],
+) -> list[AgentEvent]:
+    turn_runs = list(reversed([run for run in runs if run.parent_run_id is None]))
+    fallback_run_id = turn_runs[0].id if turn_runs else f"snapshot:{thread_id}"
+    turn_index = -1
+    current_run_id = fallback_run_id
+    activities: list[AgentEvent] = []
+    for index, message in enumerate(messages):
+        if message.get("role") == "user":
+            turn_index += 1
+            if turn_index < len(turn_runs):
+                current_run_id = turn_runs[turn_index].id
+            continue
+        if message.get("role") not in {"assistant", "tool"}:
+            continue
+        source = AgentEvent(
+            id=f"snapshot:message:{message.get('id') or index}",
+            thread_id=thread_id,
+            run_id=current_run_id,
+            type="message.completed",
+            payload=message,
+        )
+        activities.extend(project_activity_events(source))
+    return activities
 
 
 @router.post("/runs", response_model=RunView, status_code=202)
@@ -189,7 +226,15 @@ async def cancel_run(
 ) -> Response:
     thread = await services.require_thread(thread_id, user)
     try:
+        run = await services.gateway.run(thread.id, run_id)
         await services.gateway.cancel(thread.id, run_id)
+        await cancel_child_tasks(
+            services.gateway,
+            project_id=services.settings.app_project_id,
+            owner_id=user.id,
+            parent_thread_id=thread.id,
+            parent_turn_id=run.turn_id,
+        )
     except Exception as exc:
         raise HTTPException(
             status_code=remote_status(exc),
@@ -220,16 +265,22 @@ async def get_snapshot(
             status_code=502,
             detail="thread snapshot is unavailable",
         ) from exc
+    internal_messages = state_messages(state)
     messages = normalize_messages(state)
     return ThreadSnapshot(
         thread=thread,
         runs=runs,
         messages=messages,
+        activities=snapshot_activities(
+            thread_id=thread.id,
+            messages=internal_messages,
+            runs=runs,
+        ),
         todos=state_todos(state),
         interrupts=state_interrupts(state),
-        widgets=state_widgets(messages),
+        widgets=state_widgets(internal_messages),
         usage=summarize_usage(
-            messages,
+            internal_messages,
             input_cost_per_million=services.settings.openai_input_cost_per_million,
             output_cost_per_million=services.settings.openai_output_cost_per_million,
         ),
@@ -280,8 +331,44 @@ async def stream_run(
                                 thread.id,
                                 {"sandbox_id": sandbox_id},
                             )
-                    yield event_frame(event)
+                    try:
+                        activity_events = project_activity_events(event)
+                    except Exception:
+                        logger.exception(
+                            "Failed to project activity for run %s event %s",
+                            run_id,
+                            event.id,
+                        )
+                        activity_events = []
+                    public_events = [
+                        *project_public_events(event),
+                        *activity_events,
+                    ]
+                    if not public_events:
+                        public_events = [
+                            AgentEvent(
+                                id=f"cursor:{event.id}",
+                                thread_id=event.thread_id,
+                                run_id=event.run_id,
+                                type="stream.cursor",
+                                payload={},
+                                created_at=event.created_at,
+                            )
+                        ]
+                    for index, public_event in enumerate(public_events):
+                        # The first public frame advances the upstream resumable cursor.
+                        cursor_event = (
+                            public_event.model_copy(update={"id": event.id})
+                            if index == 0
+                            else public_event
+                        )
+                        yield event_frame(cursor_event, include_cursor=index == 0)
             except Exception:
+                logger.exception(
+                    "Agent Server stream failed for thread %s run %s",
+                    thread.id,
+                    run_id,
+                )
                 return
         try:
             current = await services.gateway.run(thread.id, run_id)

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -212,4 +214,60 @@ def test_real_production_boundary(tmp_path: Path) -> None:
                 assert snapshot["thread"]["metadata"]["sandbox_id"]
             finally:
                 delete = client.delete(f"/api/threads/{thread['id']}", timeout=300)
+                delete.raise_for_status()
+
+            web_thread_response = client.post(
+                "/api/threads",
+                json={"title": "Native web citation canary"},
+            )
+            web_thread_response.raise_for_status()
+            web_thread = web_thread_response.json()
+            try:
+                web_run_response = client.post(
+                    f"/api/threads/{web_thread['id']}/runs",
+                    json={
+                        "message": (
+                            "Use native web search to find the current official OpenAI "
+                            "homepage title. You must perform a web search and cite the "
+                            "exact HTTPS URL in the final answer. Do not start a researcher."
+                        ),
+                    },
+                )
+                web_run_response.raise_for_status()
+                web_run = web_run_response.json()
+                web_events = _consume_stream(client, web_thread["id"], web_run["id"])
+
+                web_snapshot_response = client.get(f"/api/threads/{web_thread['id']}/snapshot")
+                web_snapshot_response.raise_for_status()
+                web_snapshot = web_snapshot_response.json()
+                final_message = next(
+                    message
+                    for message in reversed(web_snapshot["messages"])
+                    if message["role"] == "assistant"
+                )
+                content = final_message.get("content")
+                final_text = (
+                    content
+                    if isinstance(content, str)
+                    else "\n".join(
+                        str(block.get("text", ""))
+                        for block in content or []
+                        if isinstance(block, dict) and block.get("type") == "text"
+                    )
+                )
+
+                assert web_snapshot["usage"]["web_search_calls"] >= 1
+                citation_payload = (
+                    content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+                )
+                assert re.search(r"https://\S+", final_text) or re.search(
+                    r"https://\S+",
+                    citation_payload,
+                )
+                assert "run.success" in web_events
+            finally:
+                delete = client.delete(
+                    f"/api/threads/{web_thread['id']}",
+                    timeout=300,
+                )
                 delete.raise_for_status()

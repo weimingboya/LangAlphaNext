@@ -93,6 +93,7 @@ export interface ThreadSnapshot {
   thread: Thread;
   runs: Run[];
   messages: JsonObject[];
+  activities?: AgentEvent[];
   todos: JsonObject[];
   interrupts: JsonValue[];
   widgets: Widget[];
@@ -134,6 +135,8 @@ export interface AgentProjection {
 
 export interface ActivityItem {
   id: string;
+  kind?: "reasoning" | "tool" | "subagent" | "artifact" | "system";
+  replaces_id?: string;
   title: string;
   detail?: string;
   status: "running" | "complete" | "error" | "info";

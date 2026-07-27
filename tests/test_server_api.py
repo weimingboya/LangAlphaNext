@@ -334,6 +334,7 @@ def test_auth_and_thread_metadata_are_the_authorization_boundary() -> None:
         "schema_version": 1,
         "project_id": "langalpha",
         "owner_id": "00000000-0000-0000-0000-000000000001",
+        "thread_kind": "main",
         "title": "Research",
         "sandbox_id": None,
     }

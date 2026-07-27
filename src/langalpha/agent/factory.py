@@ -3,7 +3,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Literal
 
-from deepagents import create_deep_agent
+from deepagents import (
+    GeneralPurposeSubagentProfile,
+    HarnessProfile,
+    create_deep_agent,
+    register_harness_profile,
+)
 from deepagents.middleware.filesystem import FilesystemPermission
 from langchain.agents.middleware import (
     ModelCallLimitMiddleware,
@@ -36,6 +41,13 @@ from langalpha.config import get_settings
 from langalpha.integrations.mcp import load_mcp_tools
 
 Profile = Literal["main", "researcher"]
+
+register_harness_profile(
+    "openai",
+    HarnessProfile(
+        general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
+    ),
+)
 
 _PROMPTS = {
     "main": MAIN_SYSTEM_PROMPT,
@@ -205,6 +217,6 @@ class DeepAgentFactory:
             backend=(get_context_daytona_backend() if is_main else get_researcher_backend()),
             response_format=_RESPONSE_FORMATS[profile],
             state_schema=LangAlphaAgentState,
-            context_schema=RunContext if is_main else None,
+            context_schema=RunContext,
             checkpointer=True,
         )

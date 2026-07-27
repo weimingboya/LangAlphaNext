@@ -139,9 +139,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
         "run.cancelled",
         "message.delta",
         "message.completed",
-        "state.updated",
-        "agent.custom",
-        "agent.metadata",
+        "activity.updated",
         "sandbox.bound",
         "asset.ready",
         "asset.failed",
@@ -219,6 +217,9 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
             ),
           );
         }
+      }
+      for (const activity of snapshot.activities || []) {
+        recordEvent(activity);
       }
       for (const widget of snapshot.widgets) {
         recordEvent(

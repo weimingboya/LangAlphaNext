@@ -94,5 +94,19 @@ def test_web_search_budget_removes_provider_tool_after_limit() -> None:
         captured.extend(tool for tool in bounded.tools if isinstance(tool, dict))
         return ModelResponse(result=[AIMessage(content="done")])
 
-    middleware.wrap_model_call(request, handler)
+    persisted_request = request.override(
+        messages=[
+            *request.messages,
+            AIMessage(
+                content=[
+                    {
+                        "type": "web_search_call",
+                        "id": "search-1",
+                        "action": {"type": "search"},
+                    }
+                ]
+            ),
+        ]
+    )
+    middleware.wrap_model_call(persisted_request, handler)
     assert captured == [{"type": "custom"}]

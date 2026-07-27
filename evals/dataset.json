@@ -1,0 +1,252 @@
+[
+  {
+    "inputs": {
+      "case_id": "simple_financial_concept",
+      "graph": "main",
+      "turns": [
+        {
+          "message": "请用一句话解释市盈率（P/E）。这是概念解释，不要调用工具，也不要创建 todo。"
+        }
+      ]
+    },
+    "outputs": {
+      "expectations": {
+        "required_text": ["每股收益"],
+        "max_main_tool_calls": 0,
+        "max_tasks": 0
+      },
+      "judge": {
+        "grounded_complete": false,
+        "trace_quality": false
+      }
+    },
+    "metadata": {
+      "case_id": "simple_financial_concept",
+      "tier": "core",
+      "graph": "main",
+      "turns": 1,
+      "fixture_version": "2026-07-26.v1"
+    }
+  },
+  {
+    "inputs": {
+      "case_id": "single_sec_fact",
+      "graph": "main",
+      "turns": [
+        {
+          "message": "只使用 SEC 工具查询 Apple Inc. 的 CIK，给出标准 10 位 CIK 和 SEC 官方来源。不要启动 researcher。"
+        }
+      ]
+    },
+    "outputs": {
+      "expectations": {
+        "required_main_tools": ["sec_resolve_company"],
+        "forbidden_tools": ["start_async_task"],
+        "required_text": ["0000320193"],
+        "required_urls": [
+          "https://www.sec.gov/files/company_tickers.json"
+        ],
+        "max_tasks": 0
+      },
+      "reference": {
+        "company": "Apple Inc.",
+        "cik": "0000320193",
+        "authoritative_source": "https://www.sec.gov/files/company_tickers.json"
+      },
+      "judge": {
+        "grounded_complete": false,
+        "trace_quality": false
+      }
+    },
+    "metadata": {
+      "case_id": "single_sec_fact",
+      "tier": "core",
+      "graph": "main",
+      "turns": 1,
+      "fixture_version": "2026-07-26.v1"
+    }
+  },
+  {
+    "inputs": {
+      "case_id": "missing_entity_hitl",
+      "graph": "main",
+      "turns": [
+        {
+          "message": "请分析这家公司的最近一个财年营收。"
+        }
+      ]
+    },
+    "outputs": {
+      "expectations": {
+        "required_main_tools": ["ask_user"],
+        "expected_interrupt_kind": "ask_user",
+        "max_main_tool_calls": 1,
+        "max_tasks": 0
+      },
+      "judge": {
+        "grounded_complete": false,
+        "trace_quality": false
+      }
+    },
+    "metadata": {
+      "case_id": "missing_entity_hitl",
+      "tier": "core",
+      "graph": "main",
+      "turns": 1,
+      "fixture_version": "2026-07-26.v1"
+    }
+  },
+  {
+    "inputs": {
+      "case_id": "async_research_start",
+      "graph": "main",
+      "turns": [
+        {
+          "message": "请启动 researcher，仅查证 Apple Inc. 的 SEC CIK 和 SEC 官方来源。启动后返回完整 task_id 并结束本轮，不要立即检查任务。"
+        }
+      ]
+    },
+    "outputs": {
+      "expectations": {
+        "required_main_tools": ["start_async_task"],
+        "forbidden_tools": ["check_async_task"],
+        "turn_required_tools": {
+          "0": ["start_async_task"]
+        },
+        "turn_forbidden_tools": {
+          "0": ["check_async_task"]
+        },
+        "expected_task_count": 1,
+        "expected_task_status_after_turn": {
+          "0": "running"
+        },
+        "answer_contains_task_id": true
+      },
+      "judge": {
+        "grounded_complete": false,
+        "trace_quality": false
+      }
+    },
+    "metadata": {
+      "case_id": "async_research_start",
+      "tier": "core",
+      "graph": "main",
+      "turns": 1,
+      "fixture_version": "2026-07-26.v1"
+    }
+  },
+  {
+    "inputs": {
+      "case_id": "complex_async_research",
+      "graph": "main",
+      "turns": [
+        {
+          "message": "这是一个复杂研究任务。请委派 researcher：使用 SEC fixture 比较 Apple FY2024 与 FY2023 净销售额，并使用 FRED DFF fixture 比较 2024 与 2023 的联邦基金有效利率；区分事实和推断，保留来源 URL。启动后返回完整 task_id 并结束本轮，不要立即检查。"
+        },
+        {
+          "wait_for_async": true,
+          "message": "请检查异步任务 {task_id}。成功后综合回答：列出两个财年的净销售额、变化方向及两个年度的 DFF 数值；说明利率和营收不能仅凭这些数据认定因果关系；保留 SEC 与 FRED URL。不要泄露 researcher 的内部 reasoning。"
+        }
+      ]
+    },
+    "outputs": {
+      "expectations": {
+        "required_main_tools": ["start_async_task", "check_async_task"],
+        "required_researcher_tools": [
+          "sec_resolve_company",
+          "sec_get_company_facts",
+          "fred_get_observations"
+        ],
+        "forbidden_tools": ["execute"],
+        "turn_required_tools": {
+          "0": ["start_async_task"],
+          "1": ["check_async_task"]
+        },
+        "turn_forbidden_tools": {
+          "0": ["check_async_task"]
+        },
+        "expected_task_count": 1,
+        "expected_task_status_after_turn": {
+          "0": "running",
+          "1": "success"
+        },
+        "required_text": [
+          "391.035",
+          "383.285",
+          "5.14",
+          "5.02"
+        ],
+        "required_urls": [
+          "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
+          "https://fred.stlouisfed.org/series/DFF"
+        ]
+      },
+      "reference": {
+        "facts": [
+          "Apple FY2023 net sales were USD 383.285 billion.",
+          "Apple FY2024 net sales were USD 391.035 billion.",
+          "The fixture's 2023 annual DFF value is 5.02 percent.",
+          "The fixture's 2024 annual DFF value is 5.14 percent."
+        ],
+        "required_caveat": "The supplied observations alone do not establish causality.",
+        "authoritative_sources": [
+          "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
+          "https://fred.stlouisfed.org/series/DFF"
+        ]
+      },
+      "judge": {
+        "grounded_complete": true,
+        "trace_quality": true
+      }
+    },
+    "metadata": {
+      "case_id": "complex_async_research",
+      "tier": "core",
+      "graph": "main",
+      "turns": 2,
+      "fixture_version": "2026-07-26.v1"
+    }
+  },
+  {
+    "inputs": {
+      "case_id": "researcher_source_conflict",
+      "graph": "researcher",
+      "turns": [
+        {
+          "message": "使用 sec_get_company_facts 和 public_company_guidance 两个 fixture 查证 Apple FY2024 营收。两者发生冲突时，以 SEC 为权威来源，明确描述冲突和局限，不得调和或编造第三个数值。"
+        }
+      ]
+    },
+    "outputs": {
+      "expectations": {
+        "required_researcher_tools": [
+          "sec_get_company_facts",
+          "public_company_guidance"
+        ],
+        "required_text": ["391.035", "400"],
+        "required_urls": [
+          "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
+          "https://investor.apple.com/"
+        ],
+        "structured_response_required": true,
+        "minimum_limitations": 1
+      },
+      "reference": {
+        "authoritative_value_usd_billions": 391.035,
+        "conflicting_value_usd_billions": 400.0,
+        "rule": "Prefer the SEC value and explicitly disclose the conflict."
+      },
+      "judge": {
+        "grounded_complete": true,
+        "trace_quality": false
+      }
+    },
+    "metadata": {
+      "case_id": "researcher_source_conflict",
+      "tier": "core",
+      "graph": "researcher",
+      "turns": 1,
+      "fixture_version": "2026-07-26.v1"
+    }
+  }
+]

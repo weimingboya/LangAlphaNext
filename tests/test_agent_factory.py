@@ -33,7 +33,6 @@ def test_factory_is_single_harness_entry_and_exposes_expected_tools(
         "glob",
         "grep",
         "execute",
-        "task",
         "eval",
         "materialize_dataset",
         "inspect_asset",
@@ -55,6 +54,7 @@ def test_factory_is_single_harness_entry_and_exposes_expected_tools(
         "cancel_async_task",
         "list_async_tasks",
     } <= names
+    assert "task" not in names
     assert "market_get_snapshots" not in names
 
     researcher_tools = graphs.research_graph.get_graph().nodes["tools"].data
@@ -71,6 +71,7 @@ def test_factory_is_single_harness_entry_and_exposes_expected_tools(
         "fred_get_observations",
     } <= researcher_names
     assert {
+        "task",
         "market_get_snapshots",
         "materialize_dataset",
         "inspect_asset",

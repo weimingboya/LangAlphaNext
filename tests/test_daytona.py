@@ -312,6 +312,9 @@ def test_execute_and_upload_emit_binding_and_asset_events(monkeypatch) -> None:
         def upload_files(self, files: list[tuple[str, bytes]]):
             return [SimpleNamespace(path=path, error=None) for path, _content in files]
 
+        def write(self, path: str, content: str):
+            return WriteResult(path=path)
+
         def download_files(self, paths: list[str]):
             return [SimpleNamespace(path=path, content=b"report", error=None) for path in paths]
 
@@ -364,6 +367,10 @@ def test_execute_and_upload_emit_binding_and_asset_events(monkeypatch) -> None:
     assert [event["type"] for event in emitted].count("sandbox.bound") == 1
     assert emitted[-1]["sandbox_path"] == "/workspace/artifacts/chart.svg"
     assert published[-1]["content"] == b"<svg/>"
+
+    lazy.write("/workspace/artifacts/summary.md", "summary")
+    assert emitted[-1]["sandbox_path"] == "/workspace/artifacts/summary.md"
+    assert published[-1]["content"] == b"summary"
 
 
 def test_sandbox_binding_is_persisted_by_the_agent_runtime(monkeypatch) -> None:

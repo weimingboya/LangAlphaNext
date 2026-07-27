@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_mcp_adapters.interceptors import MCPToolCallRequest
 from mcp.types import CallToolResult, ImageContent, TextContent
 
@@ -16,6 +17,7 @@ async def test_mcp_gateway_enforces_context_budget_and_redaction(monkeypatch) ->
     monkeypatch.setenv("MCP_MAX_CALLS_PER_RUN", "1")
     get_settings.cache_clear()
     gateway = MCPGatewayInterceptor()
+    gateway.set_tool_names({"quote"})
     context = RunContext(
         project_id="project",
         owner_id="owner",
@@ -26,7 +28,24 @@ async def test_mcp_gateway_enforces_context_budget_and_redaction(monkeypatch) ->
         name="quote",
         args={"symbol": "AAPL"},
         server_name="market",
-        runtime=SimpleNamespace(context=context),
+        runtime=SimpleNamespace(
+            context=context,
+            state={
+                "messages": [
+                    HumanMessage(content="research"),
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "id": "call-1",
+                                "name": "quote",
+                                "args": {"symbol": "AAPL"},
+                            }
+                        ],
+                    ),
+                ]
+            },
+        ),
     )
 
     async def handler(_: MCPToolCallRequest) -> CallToolResult:
@@ -55,7 +74,34 @@ async def test_mcp_gateway_enforces_context_budget_and_redaction(monkeypatch) ->
     assert first.content[1].data == "AA=="
     assert first.structuredContent == {"records": [{"symbol": "AAPL", "credential": "[REDACTED]"}]}
 
-    second = await gateway(request, handler)
+    second = await gateway(
+        request.override(
+            runtime=SimpleNamespace(
+                context=context,
+                state={
+                    "messages": [
+                        HumanMessage(content="research"),
+                        AIMessage(
+                            content="",
+                            tool_calls=[
+                                {
+                                    "id": "call-1",
+                                    "name": "quote",
+                                    "args": {"symbol": "AAPL"},
+                                },
+                                {
+                                    "id": "call-2",
+                                    "name": "quote",
+                                    "args": {"symbol": "MSFT"},
+                                },
+                            ],
+                        ),
+                    ]
+                },
+            )
+        ),
+        handler,
+    )
     assert second.isError is True
     assert "budget exceeded" in second.content[0].text
 

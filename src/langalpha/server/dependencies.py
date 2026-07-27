@@ -76,6 +76,7 @@ class AppServices:
         if (
             thread.metadata.get("owner_id") != user.id
             or thread.metadata.get("project_id") != self.settings.app_project_id
+            or thread.metadata.get("thread_kind") == "async_subagent"
         ):
             raise HTTPException(status_code=404, detail="thread not found")
         return thread

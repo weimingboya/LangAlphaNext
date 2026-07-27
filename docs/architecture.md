@@ -103,6 +103,12 @@ identifiers, never the researcher's reasoning or message history. SEC monetary
 facts include deterministic USD scale conversions, while Massive bars echo the
 adjustment flag, market timezone, observed dates and reproducible request URL.
 
+The default synchronous `general-purpose` subagent is disabled through a Deep
+Agents Harness Profile. Researcher Threads carry owner, project, parent Thread
+and parent turn metadata plus a child `RunContext`; cancelling a parent turn
+cancels its active researchers, and deleting a parent Thread deletes its child
+Threads.
+
 ## Assets and Daytona
 
 The `assets` table is the only product persistence table. Input bytes and
@@ -116,9 +122,11 @@ Small browser files use signed direct uploads. Files over 6 MiB use Supabase
 TUS with 6 MiB chunks. Daytona hydrates selected inputs into
 `/workspace/input/assets/{asset_id}/{filename}` when first needed.
 
-User-visible outputs are written to `/workspace/artifacts`. The Agent host
-downloads each changed output from Daytona, uploads an immutable Supabase
-object, atomically updates the Asset row, and only then emits `asset.ready`.
+User-visible outputs are written to `/workspace/artifacts`. Known `write`,
+`edit`, and upload targets sync directly. Arbitrary command execution uses a
+metadata-only manifest diff and downloads only changed outputs. The Agent host
+uploads an immutable Supabase object, atomically updates the Asset row, and only
+then emits `asset.ready`.
 Daytona is therefore disposable rather than permanent storage.
 
 Sandbox resolution is deterministic by `thread_id` labels. The Agent host

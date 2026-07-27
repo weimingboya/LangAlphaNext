@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from functools import lru_cache
 from typing import Any
@@ -31,17 +30,39 @@ class MCPGatewayInterceptor:
     """Enforce host-side MCP context, allowlist, budget, and redaction."""
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._calls: OrderedDict[str, int] = OrderedDict()
+        self._tool_names: frozenset[str] = frozenset()
 
-    def _consume_budget(self, run_id: str) -> bool:
+    def set_tool_names(self, names: set[str]) -> None:
+        self._tool_names = frozenset(names)
+
+    def _within_budget(self, runtime: object) -> bool:
         settings = get_settings()
-        with self._lock:
-            count = self._calls.get(run_id, 0) + 1
-            self._calls[run_id] = count
-            self._calls.move_to_end(run_id)
-            while len(self._calls) > 1_000:
-                self._calls.popitem(last=False)
+        state = getattr(runtime, "state", None)
+        messages = state.get("messages") if isinstance(state, dict) else None
+        if not isinstance(messages, list):
+            return False
+        current_turn: list[Any] = messages
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
+            message_type = (
+                message.get("type") if isinstance(message, dict) else getattr(message, "type", "")
+            )
+            if message_type in {"human", "user"}:
+                current_turn = messages[index + 1 :]
+                break
+        count = 0
+        for message in current_turn:
+            tool_calls = (
+                message.get("tool_calls")
+                if isinstance(message, dict)
+                else getattr(message, "tool_calls", None)
+            )
+            if not isinstance(tool_calls, list):
+                continue
+            for call in tool_calls:
+                name = call.get("name") if isinstance(call, dict) else getattr(call, "name", None)
+                if isinstance(name, str) and name in self._tool_names:
+                    count += 1
         return count <= settings.mcp_max_calls_per_run
 
     async def __call__(
@@ -59,7 +80,7 @@ class MCPGatewayInterceptor:
         runtime_context = getattr(request.runtime, "context", None)
         if not isinstance(runtime_context, RunContext):
             return _error_result("MCP capability requires a server-issued RunContext")
-        if not self._consume_budget(runtime_context.turn_id):
+        if not self._within_budget(request.runtime):
             return _error_result("MCP call budget exceeded for this run")
 
         try:
@@ -119,4 +140,6 @@ def load_mcp_tools() -> tuple[BaseTool, ...]:
         tool_name_prefix=settings.mcp_tool_name_prefix,
         handle_tool_errors=True,
     )
-    return tuple(_run_sync(client.get_tools()))
+    tools = tuple(_run_sync(client.get_tools()))
+    _GATEWAY.set_tool_names({tool.name for tool in tools})
+    return tools

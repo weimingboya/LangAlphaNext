@@ -137,6 +137,7 @@ class ThreadSnapshot(BaseModel):
     thread: ThreadView
     runs: list[RunView]
     messages: list[dict[str, Any]]
+    activities: list[AgentEvent] = Field(default_factory=list)
     todos: list[dict[str, Any]]
     interrupts: list[Any]
     widgets: list[dict[str, Any]]

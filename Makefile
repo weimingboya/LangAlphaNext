@@ -1,4 +1,4 @@
-.PHONY: sync local-up local-reset local-down agent api web web-build dev test external-test lint
+.PHONY: sync local-up local-reset local-down agent api web web-build dev test eval external-test lint
 
 sync:
 	uv sync --all-groups
@@ -33,10 +33,13 @@ test:
 	uv run pytest -q
 	npm --prefix web test
 
+eval:
+	uv run --env-file .env python -m evals.run
+
 external-test:
 	RUN_EXTERNAL_E2E=1 uv run --env-file .env pytest -q tests/external
 
 lint:
-	uv run ruff check src tests
-	uv run ruff format --check src tests
+	uv run ruff check src tests evals
+	uv run ruff format --check src tests evals
 	npm --prefix web run lint

@@ -68,73 +68,33 @@ describe("Agent output rendering", () => {
     const events = [
       event({
         id: "message-1",
-        type: "message.delta",
+        type: "activity.updated",
         payload: {
-          value: [
-            {
-              type: "AIMessageChunk",
-              tool_calls: [
-                {
-                  id: "call-1",
-                  name: "sec_resolve_company",
-                  args: { query: "Apple" },
-                },
-              ],
-              content: [
-                {
-                  type: "function_call",
-                  id: "function-item-1",
-                  call_id: "call-1",
-                  name: "sec_resolve_company",
-                  arguments: '{"query":"Apple"}',
-                },
-              ],
-            },
-          ],
+          id: "tool:run-1:call-1",
+          kind: "tool",
+          title: "Resolve SEC company",
+          detail: "Apple Inc.",
+          status: "running",
         },
       }),
       event({
         id: "message-2",
-        type: "message.delta",
+        type: "activity.updated",
         payload: {
-          value: [
-            {
-              type: "AIMessageChunk",
-              content: "",
-              tool_calls: [
-                {
-                  id: "call-1",
-                  name: "sec_resolve_company",
-                  args: { query: "Apple Inc." },
-                },
-              ],
-            },
-          ],
-        },
-      }),
-      event({
-        id: "message-3",
-        type: "message.completed",
-        payload: {
-          value: [
-            {
-              type: "tool",
-              name: "sec_resolve_company",
-              tool_call_id: "call-1",
-              status: "success",
-              content: '{"records":[]}',
-            },
-          ],
+          id: "tool:run-1:call-1",
+          kind: "tool",
+          title: "Resolve SEC company",
+          detail: "0 records",
+          status: "complete",
         },
       }),
     ];
     expect(projectActivity(events)).toEqual([
       {
         id: "tool:run-1:call-1",
-        callId: "call-1",
-        toolName: "sec_resolve_company",
+        kind: "tool",
         title: "Resolve SEC company",
-        detail: "Apple Inc.",
+        detail: "Apple Inc. · 0 records",
         status: "complete",
         created_at: "2026-01-01T00:00:00Z",
       },
@@ -144,30 +104,108 @@ describe("Agent output rendering", () => {
   test("projects provider-hosted web search progress", () => {
     const activity = projectActivity([
       event({
+        type: "activity.updated",
+        payload: {
+          id: "tool:run-1:search-1",
+          kind: "tool",
+          title: "Search the web",
+          detail: "Apple latest revenue",
+          status: "running",
+        },
+      }),
+    ]);
+    expect(activity[0]).toMatchObject({
+      id: "tool:run-1:search-1",
+      kind: "tool",
+      title: "Search the web",
+      detail: "Apple latest revenue",
+      status: "running",
+    });
+  });
+
+  test("prefers normalized activity events and exposes reasoning summaries", () => {
+    const activity = projectActivity([
+      event({
+        id: "raw-1",
         type: "message.delta",
         payload: {
           value: [
             {
               type: "AIMessageChunk",
+              id: "message-1",
               content: [
                 {
-                  type: "web_search_call",
-                  id: "search-1",
-                  status: "in_progress",
-                  action: { type: "search", query: "Apple latest revenue" },
+                  type: "reasoning",
+                  id: "reasoning-1",
+                  summary: [{ type: "summary_text", text: "Computing YoY growth" }],
                 },
               ],
             },
           ],
         },
       }),
+      event({
+        id: "activity-1",
+        type: "activity.updated",
+        payload: {
+          id: "reasoning:run-1:reasoning-1",
+          kind: "reasoning",
+          title: "Analysis",
+          detail: "Computing YoY revenue growth",
+          status: "complete",
+        },
+      }),
     ]);
-    expect(activity[0]).toMatchObject({
-      id: "tool:run-1:search-1",
-      title: "Search the web",
-      detail: "Apple latest revenue",
-      status: "running",
-    });
+
+    expect(activity).toEqual([
+      {
+        id: "reasoning:run-1:reasoning-1",
+        kind: "reasoning",
+        title: "Analysis",
+        detail: "Computing YoY revenue growth",
+        status: "complete",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ]);
+  });
+
+  test("keeps one activity row when a subagent receives its task ID", () => {
+    const activity = projectActivity([
+      event({
+        id: "activity-start",
+        type: "activity.updated",
+        payload: {
+          id: "subagent:run-1:call-start",
+          kind: "subagent",
+          title: "Start research task",
+          detail: "Check Apple revenue",
+          status: "running",
+        },
+      }),
+      event({
+        id: "activity-result",
+        type: "activity.updated",
+        payload: {
+          id: "subagent:run-1:child-thread",
+          replaces_id: "subagent:run-1:call-start",
+          kind: "subagent",
+          title: "Start research task",
+          detail: "Task started",
+          status: "complete",
+        },
+      }),
+    ]);
+
+    expect(activity).toEqual([
+      {
+        id: "subagent:run-1:child-thread",
+        kind: "subagent",
+        title: "Start research task",
+        detail: "Check Apple revenue · Task started",
+        status: "complete",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ]);
   });
 
   test("builds a bounded numeric chart model", () => {

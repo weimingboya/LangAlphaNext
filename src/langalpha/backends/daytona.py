@@ -50,18 +50,17 @@ _ARTIFACTS_ROOT = "/workspace/artifacts"
 _VIRTUAL_WORKSPACE = "/workspace"
 _COMMAND_WORKSPACE_PATTERN = re.compile(r"(?<![A-Za-z0-9_.-])/workspace(?=$|[/\s'\";:),\]}])")
 _MANIFEST_COMMAND = """python - <<'PY'
-import hashlib
 import json
 from pathlib import Path
 
 root = Path("/workspace/artifacts")
 if root.exists():
     for path in sorted(item for item in root.rglob("*") if item.is_file()):
-        data = path.read_bytes()
+        stat = path.stat()
         print(json.dumps({
             "path": "/" + path.as_posix().lstrip("/"),
-            "size_bytes": len(data),
-            "checksum": hashlib.sha256(data).hexdigest(),
+            "size_bytes": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
         }, separators=(",", ":")))
 PY"""
 
@@ -595,22 +594,16 @@ class ContextDaytonaSandbox(BaseSandbox):
     ) -> ReadResult:
         return await asyncio.to_thread(self.read, file_path, offset, limit)
 
-    def _emit_manifest_changes(
-        self,
-        before: dict[str, dict[str, object]],
-        after: dict[str, dict[str, object]],
-        backend: WorkspaceMappedDaytonaSandbox,
-    ) -> None:
-        context = self._context()
-        for path, item in after.items():
-            if before.get(path) != item:
-                _publish_artifact(context=context, backend=backend, path=path)
-
     def write(self, file_path: str, content: str) -> WriteResult:
         backend = self._backend()
-        before = list_artifact_manifest(backend)
         result = backend.write(file_path, content)
-        self._emit_manifest_changes(before, list_artifact_manifest(backend), backend)
+        if result.error is None and file_path.startswith(f"{_ARTIFACTS_ROOT}/"):
+            _publish_artifact(
+                context=self._context(),
+                backend=backend,
+                path=file_path,
+                content=content,
+            )
         return result
 
     async def awrite(self, file_path: str, content: str) -> WriteResult:
@@ -624,14 +617,22 @@ class ContextDaytonaSandbox(BaseSandbox):
         replace_all: bool = False,
     ) -> EditResult:
         backend = self._backend()
-        before = list_artifact_manifest(backend)
         result = backend.edit(
             file_path,
             old_string,
             new_string,
             replace_all=replace_all,
         )
-        self._emit_manifest_changes(before, list_artifact_manifest(backend), backend)
+        if (
+            result.error is None
+            and result.occurrences
+            and file_path.startswith(f"{_ARTIFACTS_ROOT}/")
+        ):
+            _publish_artifact(
+                context=self._context(),
+                backend=backend,
+                path=file_path,
+            )
         return result
 
     async def aedit(

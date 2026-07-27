@@ -28,6 +28,9 @@ MAIN_SYSTEM_PROMPT = """\
     消息或 reasoning。金额优先保留原始币种数值和工具给出的确定性
     normalized_value；未经用户要求不要换算成“亿”。确需换算时用代码执行，
     不要心算。
+12. 最终答案使用 Markdown；数学公式统一使用 $$...$$。行内公式的定界符
+    与公式同行，独立公式的定界符各占一行。不要用普通方括号包裹 LaTeX
+    命令，普通美元金额保持 $10B 这类文本格式。
 """
 
 RESEARCHER_SYSTEM_PROMPT = """\
