@@ -50,6 +50,7 @@ jobs:
               - 'src/langalpha/backends/**'
               - 'src/langalpha/capabilities/**'
               - 'src/langalpha/integrations/**'
+              - 'src/langalpha/projects/**'
               - 'src/langalpha/resources/**'
               - 'src/langalpha/config.py'
               - 'src/langalpha/domain/**'
@@ -63,6 +64,7 @@ jobs:
               - 'src/langalpha/server/**'
               - 'src/langalpha/assets/**'
               - 'src/langalpha/security/**'
+              - 'src/langalpha/projects/**'
               - 'src/langalpha/domain/**'
               - 'src/langalpha/config.py'
               - 'src/langalpha/backends/__init__.py'
@@ -206,7 +208,7 @@ jobs:
           }
           values.update(
               {
-                  "APP_PROJECT_ID": "langalpha",
+                  "APP_ID": "langalpha",
                   "APP_ENVIRONMENT": "production",
                   "LANGGRAPH_ASSISTANT_ID": "main",
                   "LANGSMITH_PROJECT": "langalpha-production",

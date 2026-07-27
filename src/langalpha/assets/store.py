@@ -33,7 +33,7 @@ class AssetStore(Protocol):
         self,
         *,
         owner_id: str,
-        thread_id: str,
+        project_id: str,
         request: AssetUploadCreate,
     ) -> AssetUploadTicket: ...
 
@@ -47,7 +47,7 @@ class AssetStore(Protocol):
 
     def get_asset(self, *, owner_id: str, asset_id: str) -> Asset: ...
 
-    def list_assets(self, *, owner_id: str, thread_id: str) -> list[Asset]: ...
+    def list_assets(self, *, owner_id: str, project_id: str) -> list[Asset]: ...
 
     def download_ticket(
         self,
@@ -65,8 +65,7 @@ class AssetStore(Protocol):
         self,
         *,
         owner_id: str,
-        thread_id: str,
-        turn_id: str,
+        project_id: str,
         sandbox_path: str,
         content: bytes,
         media_type: str | None = None,
@@ -76,7 +75,7 @@ class AssetStore(Protocol):
         self,
         *,
         owner_id: str,
-        thread_id: str,
+        project_id: str,
         asset_ids: Sequence[str],
     ) -> list[Asset]: ...
 
@@ -98,7 +97,7 @@ class SupabaseAssetStore:
 
     def __init__(self, settings: Settings, *, client: Client | None = None) -> None:
         self.url = settings.require_supabase_url()
-        self.bucket_id = settings.supabase_storage_bucket
+        self.bucket_name = settings.supabase_storage_bucket
         self.client = client or create_client(
             self.url,
             settings.require_supabase_secret_key(),
@@ -106,7 +105,7 @@ class SupabaseAssetStore:
 
     @property
     def bucket(self):
-        return self.client.storage.from_(self.bucket_id)
+        return self.client.storage.from_(self.bucket_name)
 
     def _tus_endpoint(self) -> str:
         parsed = urlparse(self.url)
@@ -136,11 +135,11 @@ class SupabaseAssetStore:
         )
         return _asset(self._one(response.data))
 
-    def _by_logical_key(self, thread_id: str, logical_key: str) -> Asset | None:
+    def _by_logical_key(self, project_id: str, logical_key: str) -> Asset | None:
         response = (
             self.client.table("assets")
             .select("*")
-            .eq("thread_id", thread_id)
+            .eq("project_id", project_id)
             .eq("logical_key", logical_key)
             .limit(1)
             .execute()
@@ -153,30 +152,27 @@ class SupabaseAssetStore:
         self,
         *,
         owner_id: str,
-        thread_id: str,
+        project_id: str,
         request: AssetUploadCreate,
     ) -> AssetUploadTicket:
         asset_id = str(uuid4())
         filename = safe_filename(request.filename)
-        object_path = f"{owner_id}/{thread_id}/{asset_id}/{request.sha256}/{filename}"
+        object_path = f"{owner_id}/{project_id}/{asset_id}/{request.sha256}/{filename}"
         now = utc_now().isoformat()
         asset = self._insert(
             {
                 "id": asset_id,
                 "owner_id": owner_id,
-                "thread_id": thread_id,
-                "turn_id": None,
+                "project_id": project_id,
                 "role": "input",
                 "status": "uploading",
                 "logical_key": f"input:{asset_id}",
-                "bucket_id": self.bucket_id,
                 "object_path": object_path,
                 "sandbox_path": None,
                 "filename": filename,
                 "media_type": request.media_type,
                 "size_bytes": request.size_bytes,
                 "sha256": request.sha256,
-                "retention_class": "standard",
                 "created_at": now,
                 "updated_at": now,
             }
@@ -188,6 +184,7 @@ class SupabaseAssetStore:
             raise
         return AssetUploadTicket(
             asset=asset,
+            bucket_name=self.bucket_name,
             signed_url=str(signed["signed_url"]),
             token=str(signed["token"]),
             tus_endpoint=self._tus_endpoint(),
@@ -229,12 +226,12 @@ class SupabaseAssetStore:
         )
         return _asset(self._one(response.data))
 
-    def list_assets(self, *, owner_id: str, thread_id: str) -> list[Asset]:
+    def list_assets(self, *, owner_id: str, project_id: str) -> list[Asset]:
         response = (
             self.client.table("assets")
             .select("*")
             .eq("owner_id", owner_id)
-            .eq("thread_id", thread_id)
+            .eq("project_id", project_id)
             .neq("status", "deleted")
             .order("updated_at", desc=True)
             .execute()
@@ -290,8 +287,7 @@ class SupabaseAssetStore:
         self,
         *,
         owner_id: str,
-        thread_id: str,
-        turn_id: str,
+        project_id: str,
         sandbox_path: str,
         content: bytes,
         media_type: str | None = None,
@@ -301,7 +297,7 @@ class SupabaseAssetStore:
         filename = safe_filename(sandbox_path)
         checksum = hashlib.sha256(content).hexdigest()
         logical_key = f"artifact:{sandbox_path}"
-        existing = self._by_logical_key(thread_id, logical_key)
+        existing = self._by_logical_key(project_id, logical_key)
         if (
             existing is not None
             and existing.owner_id == owner_id
@@ -313,7 +309,7 @@ class SupabaseAssetStore:
             raise AssetValidationError("logical asset owner mismatch")
 
         asset_id = existing.id if existing else str(uuid4())
-        object_path = f"{owner_id}/{thread_id}/{asset_id}/{checksum}/{filename}"
+        object_path = f"{owner_id}/{project_id}/{asset_id}/{checksum}/{filename}"
         content_type = media_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
         old_object_path = existing.object_path if existing and existing.status == "ready" else None
 
@@ -323,19 +319,16 @@ class SupabaseAssetStore:
                 {
                     "id": asset_id,
                     "owner_id": owner_id,
-                    "thread_id": thread_id,
-                    "turn_id": turn_id,
+                    "project_id": project_id,
                     "role": "artifact",
                     "status": "uploading",
                     "logical_key": logical_key,
-                    "bucket_id": self.bucket_id,
                     "object_path": object_path,
                     "sandbox_path": sandbox_path,
                     "filename": filename,
                     "media_type": content_type,
                     "size_bytes": len(content),
                     "sha256": checksum,
-                    "retention_class": "standard",
                     "created_at": now,
                     "updated_at": now,
                 }
@@ -348,7 +341,6 @@ class SupabaseAssetStore:
             asset = self._update(
                 asset_id,
                 {
-                    "turn_id": turn_id,
                     "status": "ready",
                     "object_path": object_path,
                     "sandbox_path": sandbox_path,
@@ -374,7 +366,7 @@ class SupabaseAssetStore:
         self,
         *,
         owner_id: str,
-        thread_id: str,
+        project_id: str,
         asset_ids: Sequence[str],
     ) -> list[Asset]:
         assets = [
@@ -382,8 +374,8 @@ class SupabaseAssetStore:
             for asset_id in dict.fromkeys(asset_ids)
         ]
         if any(
-            asset.thread_id != thread_id or asset.role != "input" or asset.status != "ready"
+            asset.project_id != project_id or asset.role != "input" or asset.status != "ready"
             for asset in assets
         ):
-            raise AssetValidationError("input assets must be ready and belong to the thread")
+            raise AssetValidationError("input assets must be ready and belong to the project")
         return assets

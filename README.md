@@ -76,7 +76,7 @@ SUPABASE_URL
 SUPABASE_PUBLISHABLE_KEY
 SUPABASE_SECRET_KEY
 SUPABASE_STORAGE_BUCKET
-APP_PROJECT_ID
+APP_ID
 APP_VERSION
 APP_ENVIRONMENT=production
 OPENAI_API_KEY
@@ -157,9 +157,11 @@ Agent host persists the file to Supabase before emitting `asset.ready`.
 
 New messages use LangGraph native `enqueue`. During an active run, an empty
 composer exposes cancel on the primary button, while a typed follow-up uses
-`interrupt`. The first question becomes the thread title, and thread deletion
-also removes its stored assets and sandbox. HITL uses checkpoint resume. Daytona stops after one idle hour,
-archives after seven days and deletes after 30 days.
+`interrupt`. The first question becomes the thread title. Threads within one
+Project share its workspace and Daytona sandbox; deleting a Thread preserves
+shared files, while deleting the Project removes its Threads, Assets and
+sandbox. HITL uses checkpoint resume. Daytona stops after one idle hour,
+archives after seven days and is deleted explicitly with the Project.
 
 ## Quality gates
 

@@ -5,6 +5,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from daytona import DaytonaConnectionError, DaytonaNotFoundError
 from deepagents.backends import StoreBackend
 from deepagents.backends.protocol import (
     EditResult,
@@ -199,7 +200,7 @@ def test_builtin_skills_do_not_connect_to_daytona(monkeypatch) -> None:
     def forbidden(**_: str):
         raise AssertionError("Daytona must stay lazy while product assets are read")
 
-    monkeypatch.setattr(module, "get_daytona_backend_for_thread", forbidden)
+    monkeypatch.setattr(module, "get_daytona_backend_for_project", forbidden)
     module.get_context_daytona_backend.cache_clear()
     backend = module.get_context_daytona_backend()
 
@@ -212,12 +213,13 @@ def test_builtin_skills_do_not_connect_to_daytona(monkeypatch) -> None:
     assert "Financial research" in skill.file_data["content"]
 
 
-def test_persistent_store_routes_are_scoped_by_user_and_thread() -> None:
+def test_persistent_store_routes_are_scoped_by_user_and_project() -> None:
     module.get_context_daytona_backend.cache_clear()
     backend = module.get_context_daytona_backend()
     assert isinstance(backend.routes["/memories/user/"], StoreBackend)
-    assert isinstance(backend.routes["/memories/workspace/"], StoreBackend)
-    assert isinstance(backend.routes["/memos/"], StoreBackend)
+    assert isinstance(backend.routes["/memories/project/"], StoreBackend)
+    assert "/memories/workspace/" not in backend.routes
+    assert "/memos/" not in backend.routes
 
     context = RunContext(
         project_id="project",
@@ -226,15 +228,37 @@ def test_persistent_store_routes_are_scoped_by_user_and_thread() -> None:
         turn_id="turn",
     )
     runtime = SimpleNamespace(context=context)
-    assert module._user_memory_namespace(runtime) == ("project", "owner", "memory")
-    assert module._thread_memory_namespace(runtime) == (
-        "project",
+    assert module._user_memory_namespace(runtime) == ("langalpha", "owner", "memory")
+    assert module._project_memory_namespace(runtime) == (
+        "langalpha",
         "owner",
-        "threads",
-        "thread",
+        "projects",
+        "project",
         "memory",
     )
-    assert module._memo_namespace(runtime) == ("project", "owner", "memos")
+    other_thread = SimpleNamespace(
+        context=RunContext(
+            project_id="project",
+            owner_id="owner",
+            thread_id="other-thread",
+            turn_id="other-turn",
+        )
+    )
+    other_project = SimpleNamespace(
+        context=RunContext(
+            project_id="other-project",
+            owner_id="owner",
+            thread_id="thread",
+            turn_id="turn",
+        )
+    )
+    assert module._user_memory_namespace(other_project) == module._user_memory_namespace(runtime)
+    assert module._project_memory_namespace(other_thread) == module._project_memory_namespace(
+        runtime
+    )
+    assert module._project_memory_namespace(other_project) != module._project_memory_namespace(
+        runtime
+    )
 
 
 def test_lazy_backend_resolves_only_on_operation(monkeypatch) -> None:
@@ -249,22 +273,23 @@ def test_lazy_backend_resolves_only_on_operation(monkeypatch) -> None:
 
     def resolve(
         *,
-        thread_id: str,
+        owner_id: str,
         project_id: str,
         expected_sandbox_id: str | None = None,
     ):
-        assert thread_id == "thread"
+        assert owner_id == "owner"
         assert project_id == "project"
         assert expected_sandbox_id is None
         return Resolved()
 
-    monkeypatch.setattr(module, "get_daytona_backend_for_thread", resolve)
+    monkeypatch.setattr(module, "get_daytona_backend_for_project", resolve)
     monkeypatch.setattr(
         module.ContextDaytonaSandbox,
         "_context",
         staticmethod(
             lambda: SimpleNamespace(
                 thread_id="thread",
+                owner_id="owner",
                 project_id="project",
                 turn_id="turn",
                 input_asset_ids=(),
@@ -339,7 +364,7 @@ def test_execute_and_upload_emit_binding_and_asset_events(monkeypatch) -> None:
     module.clear_backend_cache()
     monkeypatch.setattr(
         module,
-        "get_daytona_backend_for_thread",
+        "get_daytona_backend_for_project",
         lambda **_: resolved,
     )
     monkeypatch.setattr(module, "_asset_store", lambda: Store())
@@ -379,7 +404,7 @@ def test_daytona_creation_is_private_blocked_and_binding_is_strict(monkeypatch) 
         get_work_dir=lambda: "/home/daytona",
         labels={
             "app": "langalpha-next",
-            "thread_id": "thread",
+            "owner_id": "owner",
             "project_id": "project",
         },
     )
@@ -417,23 +442,265 @@ def test_daytona_creation_is_private_blocked_and_binding_is_strict(monkeypatch) 
         ),
     )
     module.clear_backend_cache()
+    bindings: list[dict[str, str]] = []
 
-    backend = module.get_daytona_backend_for_thread(
-        thread_id="thread",
+    def fake_project_store():
+        def bind_sandbox(**values: str):
+            bindings.append(values)
+            return SimpleNamespace(sandbox_id=values["sandbox_id"])
+
+        return SimpleNamespace(bind_sandbox=bind_sandbox)
+
+    fake_project_store.cache_clear = lambda: None  # type: ignore[attr-defined]
+    monkeypatch.setattr(
+        module,
+        "_project_store",
+        fake_project_store,
+    )
+
+    backend = module.get_daytona_backend_for_project(
+        owner_id="owner",
         project_id="project",
     )
     assert backend.id == "sandbox-id"
+    assert bindings == [
+        {
+            "owner_id": "owner",
+            "project_id": "project",
+            "sandbox_id": "sandbox-id",
+        }
+    ]
     params = created[0]
     assert params.public is False
     assert params.network_block_all is True
     assert params.auto_stop_interval == 60
     assert params.auto_archive_interval == 10_080
-    assert params.auto_delete_interval == 43_200
+    assert params.auto_delete_interval is None
 
+
+def test_missing_bound_sandbox_restores_durable_assets_before_rebinding(monkeypatch) -> None:
     module.clear_backend_cache()
-    with pytest.raises(RuntimeError, match="refusing to create"):
-        module.get_daytona_backend_for_thread(
-            thread_id="thread",
+    replacement = SimpleNamespace(
+        id="replacement",
+        state="started",
+        get_work_dir=lambda: "/home/daytona",
+        labels={
+            "app": "langalpha-next",
+            "owner_id": "owner",
+            "project_id": "project",
+        },
+    )
+    uploaded: list[tuple[str, bytes]] = []
+
+    class Client:
+        def get(self, sandbox_id: str):
+            if sandbox_id == "missing":
+                raise DaytonaNotFoundError("not found", status_code=404)
+            assert sandbox_id == "replacement"
+            return replacement
+
+        def list(self, *_: object, **__: object):
+            return iter(())
+
+        def create(self, *_: object, **__: object):
+            return replacement
+
+        def delete(self, *_: object, **__: object):
+            raise AssertionError("successful recovery must keep the replacement")
+
+    class Delegate:
+        id = "replacement"
+
+        def execute(self, command: str, *, timeout: int | None = None):
+            assert command == "mkdir -p /home/daytona/langalpha-workspace"
+            assert timeout == 120
+            return SimpleNamespace(output="", exit_code=0)
+
+        def upload_files(self, files: list[tuple[str, bytes]]):
+            uploaded.extend(files)
+            return [FileUploadResponse(path=path, error=None) for path, _ in files]
+
+    assets = [
+        SimpleNamespace(
+            id="input-id",
+            role="input",
+            status="ready",
+            filename="source.csv",
+            sandbox_path=None,
+        ),
+        SimpleNamespace(
+            id="artifact-id",
+            role="artifact",
+            status="ready",
+            filename="report.md",
+            sandbox_path="/workspace/artifacts/reports/report.md",
+        ),
+        SimpleNamespace(
+            id="failed-id",
+            role="artifact",
+            status="failed",
+            filename="failed.md",
+            sandbox_path="/workspace/artifacts/failed.md",
+        ),
+    ]
+
+    class AssetStore:
+        def list_assets(self, **_: str):
+            return assets
+
+        def download_bytes(self, *, owner_id: str, asset_id: str):
+            assert owner_id == "owner"
+            return (
+                next(asset for asset in assets if asset.id == asset_id),
+                f"content:{asset_id}".encode(),
+            )
+
+    replacements: list[dict[str, str]] = []
+
+    class ProjectStore:
+        def replace_sandbox(self, **values: str):
+            replacements.append(values)
+            return SimpleNamespace(sandbox_id=values["sandbox_id"])
+
+    monkeypatch.setattr(module, "_client", lambda: Client())
+    monkeypatch.setattr(module, "DaytonaSandbox", lambda **_: Delegate())
+    monkeypatch.setattr(module, "_asset_store", lambda: AssetStore())
+    monkeypatch.setattr(module, "_project_store", lambda: ProjectStore())
+    monkeypatch.setattr(
+        module,
+        "get_settings",
+        lambda: Settings(
+            _env_file=None,
+            OPENAI_API_KEY="test",
+            DAYTONA_API_KEY="test",
+        ),
+    )
+
+    backend = module.get_daytona_backend_for_project(
+        owner_id="owner",
+        project_id="project",
+        expected_sandbox_id="missing",
+    )
+
+    assert backend.id == "replacement"
+    assert uploaded == [
+        (
+            "/home/daytona/langalpha-workspace/input/assets/input-id/source.csv",
+            b"content:input-id",
+        ),
+        (
+            "/home/daytona/langalpha-workspace/artifacts/reports/report.md",
+            b"content:artifact-id",
+        ),
+    ]
+    assert replacements == [
+        {
+            "owner_id": "owner",
+            "project_id": "project",
+            "expected_sandbox_id": "missing",
+            "sandbox_id": "replacement",
+        }
+    ]
+
+
+def test_transient_daytona_error_does_not_trigger_recovery(monkeypatch) -> None:
+    module.clear_backend_cache()
+    created = False
+
+    class Client:
+        def get(self, _: str):
+            raise DaytonaConnectionError("temporarily unavailable")
+
+        def create(self, *_: object, **__: object):
+            nonlocal created
+            created = True
+            raise AssertionError("transient failures must not create a replacement")
+
+    monkeypatch.setattr(module, "_client", lambda: Client())
+
+    with pytest.raises(DaytonaConnectionError, match="temporarily unavailable"):
+        module.get_daytona_backend_for_project(
+            owner_id="owner",
             project_id="project",
-            expected_sandbox_id="missing",
+            expected_sandbox_id="sandbox-id",
         )
+    assert created is False
+
+
+def test_concurrent_recovery_uses_database_winner_and_deletes_loser(monkeypatch) -> None:
+    module.clear_backend_cache()
+
+    def sandbox(sandbox_id: str):
+        return SimpleNamespace(
+            id=sandbox_id,
+            state="started",
+            get_work_dir=lambda: "/home/daytona",
+            labels={
+                "app": "langalpha-next",
+                "owner_id": "owner",
+                "project_id": "project",
+            },
+        )
+
+    replacement = sandbox("replacement")
+    winner = sandbox("winner")
+    deleted: list[str] = []
+
+    class Client:
+        def get(self, sandbox_id: str):
+            if sandbox_id == "missing":
+                raise DaytonaNotFoundError("not found", status_code=404)
+            assert sandbox_id == "winner"
+            return winner
+
+        def list(self, *_: object, **__: object):
+            return iter(())
+
+        def create(self, *_: object, **__: object):
+            return replacement
+
+        def delete(self, target: object, **_: object):
+            deleted.append(target.id)  # type: ignore[attr-defined]
+
+    class Delegate:
+        def __init__(self, sandbox_id: str) -> None:
+            self.id = sandbox_id
+
+        def execute(self, command: str, *, timeout: int | None = None):
+            assert command == "mkdir -p /home/daytona/langalpha-workspace"
+            return SimpleNamespace(output="", exit_code=0)
+
+    class AssetStore:
+        def list_assets(self, **_: str):
+            return []
+
+    class ProjectStore:
+        def replace_sandbox(self, **_: str):
+            return SimpleNamespace(sandbox_id="winner")
+
+    monkeypatch.setattr(module, "_client", lambda: Client())
+    monkeypatch.setattr(
+        module,
+        "DaytonaSandbox",
+        lambda *, sandbox, **_: Delegate(sandbox.id),
+    )
+    monkeypatch.setattr(module, "_asset_store", lambda: AssetStore())
+    monkeypatch.setattr(module, "_project_store", lambda: ProjectStore())
+    monkeypatch.setattr(
+        module,
+        "get_settings",
+        lambda: Settings(
+            _env_file=None,
+            OPENAI_API_KEY="test",
+            DAYTONA_API_KEY="test",
+        ),
+    )
+
+    backend = module.get_daytona_backend_for_project(
+        owner_id="owner",
+        project_id="project",
+        expected_sandbox_id="missing",
+    )
+
+    assert backend.id == "winner"
+    assert deleted == ["replacement"]

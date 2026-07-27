@@ -43,8 +43,8 @@ class Settings(BaseSettings):
     daytona_target: str = Field(default="us", alias="DAYTONA_TARGET")
     daytona_auto_stop_minutes: int = Field(default=60, alias="DAYTONA_AUTO_STOP_MINUTES")
     daytona_auto_archive_minutes: int = Field(default=10_080, alias="DAYTONA_AUTO_ARCHIVE_MINUTES")
-    daytona_auto_delete_minutes: int = Field(
-        default=43_200,
+    daytona_auto_delete_minutes: int | None = Field(
+        default=None,
         alias="DAYTONA_AUTO_DELETE_MINUTES",
     )
 
@@ -78,7 +78,7 @@ class Settings(BaseSettings):
         alias="SUPABASE_STORAGE_BUCKET",
     )
 
-    app_project_id: str = Field(default="langalpha", alias="APP_PROJECT_ID")
+    app_id: str = Field(default="langalpha", alias="APP_ID")
     app_version: str = Field(default="development", alias="APP_VERSION")
     app_environment: str = Field(default="development", alias="APP_ENVIRONMENT")
 

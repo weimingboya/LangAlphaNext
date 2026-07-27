@@ -112,6 +112,57 @@ svg {
   letter-spacing: 0.035em;
 }
 
+.project-switcher {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
+  gap: 8px;
+  margin: 2px 0 8px;
+}
+
+.project-switcher select,
+.project-switcher button,
+.project-actions button {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.project-switcher select {
+  min-width: 0;
+  padding: 8px 10px;
+  font: inherit;
+  font-weight: 650;
+}
+
+.project-switcher button {
+  display: grid;
+  place-items: center;
+}
+
+.project-switcher svg {
+  width: 16px;
+  height: 16px;
+}
+
+.project-actions {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.project-actions button {
+  border: 0;
+  padding: 3px 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.project-actions .project-delete {
+  color: var(--danger);
+}
+
 .new-thread {
   display: flex;
   width: calc(100% - 16px);

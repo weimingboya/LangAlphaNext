@@ -12,6 +12,7 @@ from langalpha.domain.models import (
     Asset,
     AssetDownloadTicket,
     AssetUploadTicket,
+    ProjectView,
     ThreadView,
 )
 from langalpha.server.agent_gateway import AgentGateway, run_view
@@ -42,7 +43,7 @@ class FakeAssets:
         self,
         *,
         owner_id: str,
-        thread_id: str,
+        project_id: str,
         filename: str,
         media_type: str,
         content: bytes,
@@ -53,12 +54,11 @@ class FakeAssets:
         return Asset(
             id=asset_id,
             owner_id=owner_id,
-            thread_id=thread_id,
+            project_id=project_id,
             role="input",
             status=status,
             logical_key=f"input:{asset_id}",
-            bucket_id="langalpha-assets",
-            object_path=f"{owner_id}/{thread_id}/{asset_id}/{checksum}/{filename}",
+            object_path=f"{owner_id}/{project_id}/{asset_id}/{checksum}/{filename}",
             filename=filename,
             media_type=media_type,
             size_bytes=len(content),
@@ -67,10 +67,10 @@ class FakeAssets:
             updated_at=_now(),
         )
 
-    def create_upload(self, *, owner_id: str, thread_id: str, request):
+    def create_upload(self, *, owner_id: str, project_id: str, request):
         asset = self._asset(
             owner_id=owner_id,
-            thread_id=thread_id,
+            project_id=project_id,
             filename=request.filename,
             media_type=request.media_type,
             content=b"x" * request.size_bytes,
@@ -80,6 +80,7 @@ class FakeAssets:
         self.items[asset.id] = (asset, b"x" * request.size_bytes)
         return AssetUploadTicket(
             asset=asset,
+            bucket_name="langalpha-assets",
             signed_url="https://storage.test/upload",
             token="signed-token",
             tus_endpoint="https://storage.test/tus",
@@ -97,14 +98,14 @@ class FakeAssets:
         self,
         *,
         owner_id: str,
-        thread_id: str,
+        project_id: str,
         filename: str,
         media_type: str,
         content: bytes,
     ) -> Asset:
         asset = self._asset(
             owner_id=owner_id,
-            thread_id=thread_id,
+            project_id=project_id,
             filename=filename,
             media_type=media_type,
             content=content,
@@ -118,12 +119,12 @@ class FakeAssets:
             raise LookupError("asset not found")
         return asset
 
-    def list_assets(self, *, owner_id: str, thread_id: str) -> list[Asset]:
+    def list_assets(self, *, owner_id: str, project_id: str) -> list[Asset]:
         return [
             asset
             for asset, _ in self.items.values()
             if asset.owner_id == owner_id
-            and asset.thread_id == thread_id
+            and asset.project_id == project_id
             and asset.status != "deleted"
         ]
 
@@ -149,13 +150,80 @@ class FakeAssets:
         self,
         *,
         owner_id: str,
-        thread_id: str,
+        project_id: str,
         asset_ids: list[str],
     ) -> list[Asset]:
         assets = [self.get_asset(owner_id=owner_id, asset_id=item) for item in asset_ids]
-        if any(asset.thread_id != thread_id or asset.status != "ready" for asset in assets):
+        if any(asset.project_id != project_id or asset.status != "ready" for asset in assets):
             raise ValueError("invalid input asset")
         return assets
+
+
+class FakeProjects:
+    def __init__(self) -> None:
+        self.items: dict[str, ProjectView] = {}
+
+    def healthcheck(self) -> None:
+        return None
+
+    def create_project(self, *, owner_id: str, name: str) -> ProjectView:
+        project = ProjectView(
+            id=str(uuid4()),
+            owner_id=owner_id,
+            name=name,
+            status="active",
+            created_at=_now(),
+            updated_at=_now(),
+        )
+        self.items[project.id] = project
+        return project
+
+    def get_project(self, *, owner_id: str, project_id: str) -> ProjectView:
+        project = self.items[project_id]
+        if project.owner_id != owner_id or project.status == "deleted":
+            raise LookupError("project not found")
+        return project
+
+    def list_projects(self, *, owner_id: str) -> list[ProjectView]:
+        return [
+            project
+            for project in self.items.values()
+            if project.owner_id == owner_id and project.status != "deleted"
+        ]
+
+    def rename_project(self, *, owner_id: str, project_id: str, name: str) -> ProjectView:
+        project = self.get_project(owner_id=owner_id, project_id=project_id)
+        project.name = name
+        project.updated_at = _now()
+        return project
+
+    def bind_sandbox(self, *, owner_id: str, project_id: str, sandbox_id: str) -> ProjectView:
+        project = self.get_project(owner_id=owner_id, project_id=project_id)
+        project.sandbox_id = sandbox_id
+        return project
+
+    def replace_sandbox(
+        self,
+        *,
+        owner_id: str,
+        project_id: str,
+        expected_sandbox_id: str,
+        sandbox_id: str,
+    ) -> ProjectView:
+        project = self.get_project(owner_id=owner_id, project_id=project_id)
+        if project.sandbox_id == expected_sandbox_id:
+            project.sandbox_id = sandbox_id
+        return project
+
+    def mark_deleting(self, *, owner_id: str, project_id: str) -> ProjectView:
+        project = self.get_project(owner_id=owner_id, project_id=project_id)
+        project.status = "deleting"
+        return project
+
+    def delete_project(self, *, owner_id: str, project_id: str) -> None:
+        project = self.items[project_id]
+        assert project.owner_id == owner_id
+        project.status = "deleted"
 
 
 class FakeStreamRuns:
@@ -192,6 +260,9 @@ class FakeGateway:
         self.states: dict[str, dict] = {}
         self.submitted: list[dict] = []
         self.client = SimpleNamespace(runs=FakeStreamRuns(self))
+
+    async def healthcheck(self, assistant_id: str) -> None:
+        assert assistant_id == "main"
 
     async def create_thread(self, *, metadata: dict, thread_id: str | None = None) -> ThreadView:
         now = _now()
@@ -288,9 +359,22 @@ def test_agent_gateway_passes_deployment_api_key(monkeypatch) -> None:
     }
 
 
+def test_ready_rejects_unreachable_dependencies() -> None:
+    client, gateway, _ = _client()
+
+    async def unavailable(_assistant_id: str) -> None:
+        raise RuntimeError("offline")
+
+    gateway.healthcheck = unavailable  # type: ignore[method-assign]
+    response = client.get("/ready")
+    assert response.status_code == 503
+    assert response.json()["detail"]["unavailable"] == ["LANGGRAPH"]
+
+
 def _client() -> tuple[TestClient, FakeGateway, FakeAssets]:
     gateway = FakeGateway()
     assets = FakeAssets()
+    projects = FakeProjects()
     settings = Settings(
         _env_file=None,
         OPENAI_API_KEY="test",
@@ -307,14 +391,30 @@ def _client() -> tuple[TestClient, FakeGateway, FakeAssets]:
             gateway=gateway,  # type: ignore[arg-type]
             authenticator=FakeAuthenticator(),
             asset_store=assets,
+            project_store=projects,
         )
     )
     return client, gateway, assets
 
 
-def _thread(client: TestClient, token: str = "valid") -> dict:
+def _project(client: TestClient, token: str = "valid", name: str = "Test Project") -> dict:
     response = client.post(
-        "/api/threads",
+        "/api/projects",
+        json={"name": name},
+        headers=_headers(token),
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def _thread(
+    client: TestClient,
+    token: str = "valid",
+    project_id: str | None = None,
+) -> dict:
+    project_id = project_id or _project(client, token)["id"]
+    response = client.post(
+        f"/api/projects/{project_id}/threads",
         json={"title": "Research"},
         headers=_headers(token),
     )
@@ -322,21 +422,57 @@ def _thread(client: TestClient, token: str = "valid") -> dict:
     return response.json()
 
 
+def test_projects_scope_threads_and_support_lifecycle() -> None:
+    client, _, _ = _client()
+    first = _project(client, name="Alpha")
+    second = _project(client, name="Beta")
+    first_thread = _thread(client, project_id=first["id"])
+    second_thread = _thread(client, project_id=second["id"])
+
+    first_threads = client.get(
+        f"/api/projects/{first['id']}/threads",
+        headers=_headers(),
+    )
+    first_threads.raise_for_status()
+    assert [thread["id"] for thread in first_threads.json()] == [first_thread["id"]]
+    assert second_thread["id"] not in {thread["id"] for thread in first_threads.json()}
+    assert (
+        client.get(
+            f"/api/projects/{first['id']}",
+            headers=_headers("other"),
+        ).status_code
+        == 404
+    )
+
+    renamed = client.patch(
+        f"/api/projects/{first['id']}",
+        json={"name": "Alpha renamed"},
+        headers=_headers(),
+    )
+    renamed.raise_for_status()
+    assert renamed.json()["name"] == "Alpha renamed"
+
+    empty = _project(client, name="Disposable")
+    deleted = client.delete(f"/api/projects/{empty['id']}", headers=_headers())
+    assert deleted.status_code == 204
+    assert client.get(f"/api/projects/{empty['id']}", headers=_headers()).status_code == 404
+
+
 def test_auth_and_thread_metadata_are_the_authorization_boundary() -> None:
     client, _, _ = _client()
     assert client.get("/health").json() == {"status": "ok"}
     assert client.get("/ready").json() == {"status": "ready"}
-    assert client.get("/api/threads").status_code == 401
+    assert client.get("/api/projects").status_code == 401
 
     thread = _thread(client)
     assert thread["id"]
     assert thread["metadata"] == {
-        "schema_version": 1,
-        "project_id": "langalpha",
+        "schema_version": 2,
+        "app_id": "langalpha",
+        "project_id": thread["metadata"]["project_id"],
         "owner_id": "00000000-0000-0000-0000-000000000001",
         "thread_kind": "main",
         "title": "Research",
-        "sandbox_id": None,
     }
     assert client.get(f"/api/threads/{thread['id']}", headers=_headers("other")).status_code == 404
 
@@ -354,7 +490,7 @@ def test_native_run_strategy_metadata_and_input_assets() -> None:
     thread = _thread(client)
     asset = assets.ingest_input(
         owner_id=thread["metadata"]["owner_id"],
-        thread_id=thread["id"],
+        project_id=thread["metadata"]["project_id"],
         filename="data.csv",
         media_type="text/csv",
         content=b"value\n1\n",
@@ -387,7 +523,7 @@ def test_thread_delete_cancels_runs_and_removes_assets() -> None:
     thread = _thread(client)
     asset = assets.ingest_input(
         owner_id=thread["metadata"]["owner_id"],
-        thread_id=thread["id"],
+        project_id=thread["metadata"]["project_id"],
         filename="delete-me.txt",
         media_type="text/plain",
         content=b"temporary",
@@ -405,7 +541,7 @@ def test_thread_delete_cancels_runs_and_removes_assets() -> None:
     assert deleted.status_code == 204
     assert thread["id"] not in gateway.threads
     assert gateway.remote_runs[thread["id"]][run_id]["status"] == "interrupted"
-    assert assets.items[asset.id][0].status == "deleted"
+    assert assets.items[asset.id][0].status == "ready"
 
 
 def test_snapshot_stream_resume_and_cancel_use_agent_server_state() -> None:
@@ -413,7 +549,7 @@ def test_snapshot_stream_resume_and_cancel_use_agent_server_state() -> None:
     thread = _thread(client)
     asset = assets.ingest_input(
         owner_id=thread["metadata"]["owner_id"],
-        thread_id=thread["id"],
+        project_id=thread["metadata"]["project_id"],
         filename="notes.txt",
         media_type="text/plain",
         content=b"notes",
@@ -435,7 +571,6 @@ def test_snapshot_stream_resume_and_cancel_use_agent_server_state() -> None:
     assert "event: asset.ready" in stream.text
     assert "event: run.success" in stream.text
     assert gateway.client.runs.last_event_id == "event-0"
-    assert gateway.threads[thread["id"]].metadata["sandbox_id"] == "sandbox-1"
 
     gateway.remote_runs[thread["id"]][run["id"]]["status"] = "success"
     gateway.states[thread["id"]]["interrupts"] = [{"value": {"question": "Continue?"}}]
@@ -472,7 +607,7 @@ def test_upload_contract_has_no_custom_steering_routes() -> None:
     thread = _thread(client)
     checksum = hashlib.sha256(b"x").hexdigest()
     ticket = client.post(
-        f"/api/threads/{thread['id']}/assets/uploads",
+        f"/api/projects/{thread['metadata']['project_id']}/assets/uploads",
         json={
             "filename": "input.txt",
             "media_type": "text/plain",
@@ -483,6 +618,7 @@ def test_upload_contract_has_no_custom_steering_routes() -> None:
     )
     ticket.raise_for_status()
     payload = ticket.json()
+    assert payload["bucket_name"] == "langalpha-assets"
     assert payload["signed_url"] == "https://storage.test/upload"
 
     completed = client.post(

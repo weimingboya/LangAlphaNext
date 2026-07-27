@@ -66,7 +66,7 @@ def _local_stack(tmp_path: Path) -> Iterator[tuple[str, str]]:
     environment = {
         **os.environ,
         "LANGGRAPH_SERVER_URL": agent_url,
-        "APP_PROJECT_ID": project_id,
+        "APP_ID": project_id,
         "APP_ENVIRONMENT": "external-test",
         "APP_VERSION": "external-test",
         "LANGSMITH_PROJECT": project_id,
@@ -146,8 +146,14 @@ def test_real_production_boundary(tmp_path: Path) -> None:
     headers = {"Authorization": f"Bearer {os.environ['SUPABASE_TEST_ACCESS_TOKEN']}"}
     with _local_stack(tmp_path) as (api_url, _project_id):
         with httpx.Client(base_url=api_url, headers=headers, timeout=60) as client:
+            project_response = client.post(
+                "/api/projects",
+                json={"name": "External canary"},
+            )
+            project_response.raise_for_status()
+            project = project_response.json()
             thread_response = client.post(
-                "/api/threads",
+                f"/api/projects/{project['id']}/threads",
                 json={"title": "External production boundary"},
             )
             thread_response.raise_for_status()
@@ -156,7 +162,7 @@ def test_real_production_boundary(tmp_path: Path) -> None:
                 content = b"symbol\nAAPL\nMSFT\n"
                 checksum = hashlib.sha256(content).hexdigest()
                 ticket_response = client.post(
-                    f"/api/threads/{thread['id']}/assets/uploads",
+                    f"/api/projects/{project['id']}/assets/uploads",
                     json={
                         "filename": "stocks.csv",
                         "media_type": "text/csv",
@@ -211,13 +217,14 @@ def test_real_production_boundary(tmp_path: Path) -> None:
                 assert "sandbox.bound" in event_types
                 assert "asset.ready" in event_types
                 assert "run.success" in event_types
-                assert snapshot["thread"]["metadata"]["sandbox_id"]
+                bound_project = client.get(f"/api/projects/{project['id']}").json()
+                assert bound_project["sandbox_id"]
             finally:
                 delete = client.delete(f"/api/threads/{thread['id']}", timeout=300)
                 delete.raise_for_status()
 
             web_thread_response = client.post(
-                "/api/threads",
+                f"/api/projects/{project['id']}/threads",
                 json={"title": "Native web citation canary"},
             )
             web_thread_response.raise_for_status()
@@ -271,3 +278,8 @@ def test_real_production_boundary(tmp_path: Path) -> None:
                     timeout=300,
                 )
                 delete.raise_for_status()
+            project_delete = client.delete(
+                f"/api/projects/{project['id']}",
+                timeout=300,
+            )
+            project_delete.raise_for_status()

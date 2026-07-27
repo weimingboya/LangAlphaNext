@@ -21,6 +21,7 @@ from langchain_quickjs import CodeInterpreterMiddleware
 
 from langalpha.agent.async_subagents import CompactAsyncSubAgentMiddleware
 from langalpha.agent.context import RunContext
+from langalpha.agent.memory import MAIN_MEMORY_FILES, MemoryBootstrapMiddleware
 from langalpha.agent.model import build_model
 from langalpha.agent.prompts import (
     MAIN_SYSTEM_PROMPT,
@@ -63,7 +64,7 @@ _RESPONSE_FORMATS = {
 FILESYSTEM_PERMISSIONS = (
     FilesystemPermission(
         operations=["write"],
-        paths=["/skills/**", "/memory/**", "/memos/**"],
+        paths=["/skills/**", "/memory/**"],
         mode="deny",
     ),
 )
@@ -94,6 +95,7 @@ class DeepAgentFactory:
     ):
         settings = get_settings()
         is_main = profile == "main"
+        backend = get_context_daytona_backend() if is_main else get_researcher_backend()
         mcp_tools = list(load_mcp_tools()) if is_main else []
         web_search_tool = build_openai_web_search_tool()
         main_finance_tools = [
@@ -165,6 +167,8 @@ class DeepAgentFactory:
                 on_failure="error",
             ),
         ]
+        if is_main:
+            middleware.append(MemoryBootstrapMiddleware(backend))
         if include_async_subagents:
             middleware.append(
                 ToolCallLimitMiddleware(
@@ -178,7 +182,10 @@ class DeepAgentFactory:
                     async_subagents=[
                         {
                             "name": "researcher",
-                            "description": "并行完成证据检索、数据验证和可复现分析。",
+                            "description": (
+                                "Gather evidence, validate data, and perform focused "
+                                "reproducible analysis in parallel."
+                            ),
                             "graph_id": "researcher",
                         },
                     ]
@@ -213,9 +220,9 @@ class DeepAgentFactory:
             system_prompt=_PROMPTS[profile],
             middleware=middleware,
             skills=["/skills/"] if is_main else RESEARCHER_SKILLS,
-            memory=["/memory/AGENTS.md"] if is_main else None,
+            memory=MAIN_MEMORY_FILES if is_main else None,
             permissions=(list(FILESYSTEM_PERMISSIONS) if is_main else list(RESEARCHER_PERMISSIONS)),
-            backend=(get_context_daytona_backend() if is_main else get_researcher_backend()),
+            backend=backend,
             response_format=_RESPONSE_FORMATS[profile],
             state_schema=LangAlphaAgentState,
             context_schema=RunContext,

@@ -71,6 +71,7 @@ async def create_run(
     services: ServicesDep,
 ) -> RunView:
     thread = await services.require_thread(thread_id, user)
+    project = await services.project_for_thread(thread, user)
     try:
         state = await services.gateway.state(thread.id)
     except Exception as exc:
@@ -86,6 +87,7 @@ async def create_run(
 
     input_assets = await services.require_assets(
         user=user,
+        project=project,
         thread=thread,
         asset_ids=body.input_asset_ids,
     )
@@ -102,7 +104,8 @@ async def create_run(
     turn_id = str(uuid4())
     settings = services.settings
     metadata = {
-        "project_id": settings.app_project_id,
+        "app_id": settings.app_id,
+        "project_id": project.id,
         "owner_id": user.id,
         "thread_id": thread.id,
         "turn_id": turn_id,
@@ -118,6 +121,7 @@ async def create_run(
             input={"messages": [{"role": "user", "content": message}]},
             context=services.run_context(
                 user=user,
+                project=project,
                 thread=thread,
                 turn_id=turn_id,
                 input_asset_ids=body.input_asset_ids,
@@ -139,6 +143,7 @@ async def list_runs(
     services: ServicesDep,
 ) -> list[RunView]:
     thread = await services.require_thread(thread_id, user)
+    await services.project_for_thread(thread, user)
     try:
         return await services.gateway.runs(thread.id)
     except Exception as exc:
@@ -156,6 +161,7 @@ async def get_run(
     services: ServicesDep,
 ) -> RunView:
     thread = await services.require_thread(thread_id, user)
+    await services.project_for_thread(thread, user)
     try:
         return await services.gateway.run(thread.id, run_id)
     except Exception as exc:
@@ -175,6 +181,7 @@ async def resume_run(
     services: ServicesDep,
 ) -> RunView:
     thread = await services.require_thread(thread_id, user)
+    project = await services.project_for_thread(thread, user)
     try:
         previous = await services.gateway.run(thread.id, run_id)
         state = await services.gateway.state(thread.id)
@@ -188,7 +195,8 @@ async def resume_run(
 
     settings = services.settings
     metadata = {
-        "project_id": settings.app_project_id,
+        "app_id": settings.app_id,
+        "project_id": project.id,
         "owner_id": user.id,
         "thread_id": thread.id,
         "turn_id": previous.turn_id,
@@ -204,6 +212,7 @@ async def resume_run(
             command={"resume": body.value},
             context=services.run_context(
                 user=user,
+                project=project,
                 thread=thread,
                 turn_id=previous.turn_id,
             ),
@@ -225,12 +234,13 @@ async def cancel_run(
     services: ServicesDep,
 ) -> Response:
     thread = await services.require_thread(thread_id, user)
+    project = await services.project_for_thread(thread, user)
     try:
         run = await services.gateway.run(thread.id, run_id)
         await services.gateway.cancel(thread.id, run_id)
         await cancel_child_tasks(
             services.gateway,
-            project_id=services.settings.app_project_id,
+            project_id=project.id,
             owner_id=user.id,
             parent_thread_id=thread.id,
             parent_turn_id=run.turn_id,
@@ -250,6 +260,7 @@ async def get_snapshot(
     services: ServicesDep,
 ) -> ThreadSnapshot:
     thread = await services.require_thread(thread_id, user)
+    project = await services.project_for_thread(thread, user)
     try:
         state, runs, thread_assets = await asyncio.gather(
             services.gateway.state(thread.id),
@@ -257,7 +268,7 @@ async def get_snapshot(
             asyncio.to_thread(
                 services.asset_store.list_assets,
                 owner_id=user.id,
-                thread_id=thread.id,
+                project_id=project.id,
             ),
         )
     except Exception as exc:
@@ -298,6 +309,7 @@ async def stream_run(
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
 ) -> StreamingResponse:
     thread = await services.require_thread(thread_id, user)
+    await services.project_for_thread(thread, user)
     try:
         await services.gateway.client.runs.get(thread.id, run_id)
     except Exception as exc:
@@ -324,13 +336,6 @@ async def stream_run(
                         thread_id=thread.id,
                         graph_run_id=run_id,
                     )
-                    if event.type == "sandbox.bound":
-                        sandbox_id = event.payload.get("sandbox_id")
-                        if isinstance(sandbox_id, str):
-                            await services.gateway.update_thread_metadata(
-                                thread.id,
-                                {"sandbox_id": sandbox_id},
-                            )
                     try:
                         activity_events = project_activity_events(event)
                     except Exception:

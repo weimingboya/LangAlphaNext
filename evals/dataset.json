@@ -11,7 +11,7 @@
     },
     "outputs": {
       "expectations": {
-        "required_text": ["每股收益"],
+        "required_answer_text": ["每股收益"],
         "max_main_tool_calls": 0,
         "max_tasks": 0
       },
@@ -25,7 +25,7 @@
       "tier": "core",
       "graph": "main",
       "turns": 1,
-      "fixture_version": "2026-07-26.v1"
+      "fixture_version": "2026-07-27.v1"
     }
   },
   {
@@ -42,8 +42,8 @@
       "expectations": {
         "required_main_tools": ["sec_resolve_company"],
         "forbidden_tools": ["start_async_task"],
-        "required_text": ["0000320193"],
-        "required_urls": [
+        "required_answer_text": ["0000320193"],
+        "required_answer_urls": [
           "https://www.sec.gov/files/company_tickers.json"
         ],
         "max_tasks": 0
@@ -63,7 +63,7 @@
       "tier": "core",
       "graph": "main",
       "turns": 1,
-      "fixture_version": "2026-07-26.v1"
+      "fixture_version": "2026-07-27.v1"
     }
   },
   {
@@ -80,6 +80,9 @@
       "expectations": {
         "required_main_tools": ["ask_user"],
         "expected_interrupt_kind": "ask_user",
+        "expected_run_status_after_turn": {
+          "0": "interrupted"
+        },
         "max_main_tool_calls": 1,
         "max_tasks": 0
       },
@@ -93,7 +96,7 @@
       "tier": "core",
       "graph": "main",
       "turns": 1,
-      "fixture_version": "2026-07-26.v1"
+      "fixture_version": "2026-07-27.v1"
     }
   },
   {
@@ -132,7 +135,7 @@
       "tier": "core",
       "graph": "main",
       "turns": 1,
-      "fixture_version": "2026-07-26.v1"
+      "fixture_version": "2026-07-27.v1"
     }
   },
   {
@@ -170,13 +173,13 @@
           "0": "running",
           "1": "success"
         },
-        "required_text": [
+        "required_answer_text": [
           "391.035",
           "383.285",
           "5.14",
           "5.02"
         ],
-        "required_urls": [
+        "required_answer_urls": [
           "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
           "https://fred.stlouisfed.org/series/DFF"
         ]
@@ -204,7 +207,7 @@
       "tier": "core",
       "graph": "main",
       "turns": 2,
-      "fixture_version": "2026-07-26.v1"
+      "fixture_version": "2026-07-27.v1"
     }
   },
   {
@@ -223,8 +226,8 @@
           "sec_get_company_facts",
           "public_company_guidance"
         ],
-        "required_text": ["391.035", "400"],
-        "required_urls": [
+        "required_structured_text": ["391.035", "400"],
+        "required_structured_urls": [
           "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
           "https://investor.apple.com/"
         ],
@@ -246,7 +249,198 @@
       "tier": "core",
       "graph": "researcher",
       "turns": 1,
-      "fixture_version": "2026-07-26.v1"
+      "fixture_version": "2026-07-27.v1"
+    }
+  },
+  {
+    "inputs": {
+      "case_id": "policy_direct_sec",
+      "graph": "main",
+      "turns": [
+        {
+          "message": "Apple Inc. 的标准十位 CIK 是什么？请附上权威来源。"
+        }
+      ]
+    },
+    "outputs": {
+      "expectations": {
+        "required_main_tools": ["sec_resolve_company"],
+        "forbidden_tools": ["start_async_task"],
+        "required_answer_text": ["0000320193"],
+        "required_answer_urls": [
+          "https://www.sec.gov/files/company_tickers.json"
+        ],
+        "max_tasks": 0
+      },
+      "reference": {
+        "company": "Apple Inc.",
+        "cik": "0000320193",
+        "authoritative_source": "https://www.sec.gov/files/company_tickers.json"
+      },
+      "judge": {
+        "grounded_complete": false,
+        "trace_quality": false
+      }
+    },
+    "metadata": {
+      "case_id": "policy_direct_sec",
+      "tier": "policy",
+      "graph": "main",
+      "turns": 1,
+      "fixture_version": "2026-07-27.v1"
+    }
+  },
+  {
+    "inputs": {
+      "case_id": "policy_direct_macro",
+      "graph": "main",
+      "turns": [
+        {
+          "message": "比较 2023 年和 2024 年联邦基金有效利率 DFF 的年度数值，给出来源。"
+        }
+      ]
+    },
+    "outputs": {
+      "expectations": {
+        "required_main_tools": ["fred_get_observations"],
+        "forbidden_tools": ["start_async_task"],
+        "required_answer_text": ["5.02", "5.14"],
+        "required_answer_urls": [
+          "https://fred.stlouisfed.org/series/DFF"
+        ],
+        "max_tasks": 0
+      },
+      "reference": {
+        "facts": [
+          "The fixture's 2023 annual DFF value is 5.02 percent.",
+          "The fixture's 2024 annual DFF value is 5.14 percent."
+        ],
+        "authoritative_source": "https://fred.stlouisfed.org/series/DFF"
+      },
+      "judge": {
+        "grounded_complete": false,
+        "trace_quality": false
+      }
+    },
+    "metadata": {
+      "case_id": "policy_direct_macro",
+      "tier": "policy",
+      "graph": "main",
+      "turns": 1,
+      "fixture_version": "2026-07-27.v1"
+    }
+  },
+  {
+    "inputs": {
+      "case_id": "policy_complex_delegation",
+      "graph": "main",
+      "turns": [
+        {
+          "message": "比较 Apple FY2023 与 FY2024 的净销售额，并结合 2023 与 2024 年 DFF 年度值给出有来源的分析。这包含两个独立证据流，请先安排研究并返回任务标识，本轮先不要下结论。"
+        },
+        {
+          "wait_for_async": true,
+          "message": "异步研究 {task_id} 已有结果，请现在完成综合：列出四个数值、变化方向和来源，并避免把利率变化直接解释为营收变化的原因。"
+        }
+      ]
+    },
+    "outputs": {
+      "expectations": {
+        "required_main_tools": ["start_async_task", "check_async_task"],
+        "required_researcher_tools": [
+          "sec_resolve_company",
+          "sec_get_company_facts",
+          "fred_get_observations"
+        ],
+        "turn_required_tools": {
+          "0": ["start_async_task"],
+          "1": ["check_async_task"]
+        },
+        "turn_forbidden_tools": {
+          "0": ["check_async_task"]
+        },
+        "expected_task_count": 1,
+        "expected_task_status_after_turn": {
+          "0": "running",
+          "1": "success"
+        },
+        "required_answer_text": [
+          "391.035",
+          "383.285",
+          "5.14",
+          "5.02"
+        ],
+        "required_answer_urls": [
+          "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
+          "https://fred.stlouisfed.org/series/DFF"
+        ]
+      },
+      "reference": {
+        "facts": [
+          "Apple FY2023 net sales were USD 383.285 billion.",
+          "Apple FY2024 net sales were USD 391.035 billion.",
+          "The fixture's 2023 annual DFF value is 5.02 percent.",
+          "The fixture's 2024 annual DFF value is 5.14 percent."
+        ],
+        "required_caveat": "The supplied observations alone do not establish causality.",
+        "authoritative_sources": [
+          "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
+          "https://fred.stlouisfed.org/series/DFF"
+        ]
+      },
+      "judge": {
+        "grounded_complete": true,
+        "trace_quality": false
+      }
+    },
+    "metadata": {
+      "case_id": "policy_complex_delegation",
+      "tier": "policy",
+      "graph": "main",
+      "turns": 2,
+      "fixture_version": "2026-07-27.v1"
+    }
+  },
+  {
+    "inputs": {
+      "case_id": "policy_source_authority",
+      "graph": "researcher",
+      "turns": [
+        {
+          "message": "核验 Apple FY2024 营收。SEC 公司事实与公司公开指引给出的数值并不一致，请判断应采用哪个数值，并如实说明冲突与局限。"
+        }
+      ]
+    },
+    "outputs": {
+      "expectations": {
+        "required_researcher_tools": [
+          "sec_get_company_facts",
+          "public_company_guidance"
+        ],
+        "required_structured_text": ["391.035", "400"],
+        "required_structured_urls": [
+          "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
+          "https://investor.apple.com/"
+        ],
+        "structured_response_required": true,
+        "minimum_limitations": 1
+      },
+      "reference": {
+        "authoritative_value_usd_billions": 391.035,
+        "conflicting_value_usd_billions": 400.0,
+        "rule": "Prefer the SEC value and explicitly disclose the conflict."
+      },
+      "judge": {
+        "grounded_complete": true,
+        "trace_quality": false
+      }
+    },
+    "metadata": {
+      "case_id": "policy_source_authority",
+      "tier": "policy",
+      "graph": "researcher",
+      "turns": 1,
+      "fixture_version": "2026-07-27.v1"
     }
   }
 ]

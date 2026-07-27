@@ -13,6 +13,7 @@ from daytona import (
     CreateSandboxFromSnapshotParams,
     Daytona,
     DaytonaConfig,
+    DaytonaNotFoundError,
     ListSandboxesQuery,
     SandboxState,
 )
@@ -37,6 +38,7 @@ from langgraph.runtime import get_runtime
 from langalpha.agent.context import RunContext
 from langalpha.assets.store import SupabaseAssetStore, safe_filename
 from langalpha.config import get_settings
+from langalpha.projects.store import SupabaseProjectStore
 
 _LOCK = threading.RLock()
 _CLIENT: Daytona | None = None
@@ -63,10 +65,10 @@ if root.exists():
 PY"""
 
 
-def _sandbox_name(thread_id: str) -> str:
-    readable = re.sub(r"[^a-z0-9-]+", "-", thread_id.lower()).strip("-")[:24]
-    digest = sha256(thread_id.encode()).hexdigest()[:10]
-    return f"langalpha-{readable or 'thread'}-{digest}"[:63]
+def _sandbox_name(project_id: str) -> str:
+    readable = re.sub(r"[^a-z0-9-]+", "-", project_id.lower()).strip("-")[:24]
+    digest = sha256(project_id.encode()).hexdigest()[:10]
+    return f"langalpha-project-{readable or 'workspace'}-{digest}"[:63]
 
 
 def _client() -> Daytona:
@@ -87,6 +89,20 @@ def _ensure_started(sandbox: object) -> None:
     state = getattr(sandbox, "state", None)
     if state not in {SandboxState.STARTED, "started"}:
         sandbox.start(timeout=120)  # type: ignore[attr-defined]
+
+
+def _sandbox_labels(owner_id: str, project_id: str) -> dict[str, str]:
+    return {
+        "app": "langalpha-next",
+        "owner_id": owner_id,
+        "project_id": project_id,
+    }
+
+
+def _validate_sandbox_labels(sandbox: object, expected: dict[str, str]) -> None:
+    labels = getattr(sandbox, "labels", {}) or {}
+    if any(labels.get(key) != value for key, value in expected.items()):
+        raise RuntimeError("Daytona sandbox labels do not match workspace")
 
 
 def _emit_custom(payload: dict[str, object]) -> None:
@@ -129,6 +145,33 @@ def _asset_store() -> SupabaseAssetStore:
     return SupabaseAssetStore(get_settings())
 
 
+@lru_cache(maxsize=1)
+def _project_store() -> SupabaseProjectStore:
+    return SupabaseProjectStore(get_settings())
+
+
+def _restore_project_assets(
+    *,
+    backend: WorkspaceMappedDaytonaSandbox,
+    owner_id: str,
+    project_id: str,
+) -> None:
+    store = _asset_store()
+    for asset in store.list_assets(owner_id=owner_id, project_id=project_id):
+        if asset.status != "ready" or asset.role not in {"input", "artifact"}:
+            continue
+        if asset.role == "artifact":
+            path = asset.sandbox_path
+            if not path or not path.startswith(f"{_ARTIFACTS_ROOT}/"):
+                raise RuntimeError(f"artifact {asset.id} has no recoverable sandbox path")
+        else:
+            path = f"/workspace/input/assets/{asset.id}/{safe_filename(asset.filename)}"
+        _, content = store.download_bytes(owner_id=owner_id, asset_id=asset.id)
+        response = backend.upload_files([(path, content)])[0]
+        if response.error:
+            raise RuntimeError(f"failed to restore asset {asset.id}: {response.error}")
+
+
 def _publish_artifact(
     *,
     context: RunContext,
@@ -145,8 +188,7 @@ def _publish_artifact(
         payload = content.encode() if isinstance(content, str) else content
         asset = _asset_store().publish_artifact(
             owner_id=context.owner_id,
-            thread_id=context.thread_id,
-            turn_id=context.turn_id,
+            project_id=context.project_id,
             sandbox_path=path,
             content=payload,
             media_type=mimetypes.guess_type(path)[0] or "application/octet-stream",
@@ -172,23 +214,18 @@ def _run_context(runtime: object) -> RunContext:
 
 def _user_memory_namespace(runtime: object) -> tuple[str, ...]:
     context = _run_context(runtime)
-    return (context.project_id, context.owner_id, "memory")
+    return (context.app_id, context.owner_id, "memory")
 
 
-def _thread_memory_namespace(runtime: object) -> tuple[str, ...]:
+def _project_memory_namespace(runtime: object) -> tuple[str, ...]:
     context = _run_context(runtime)
     return (
-        context.project_id,
+        context.app_id,
         context.owner_id,
-        "threads",
-        context.thread_id,
+        "projects",
+        context.project_id,
         "memory",
     )
-
-
-def _memo_namespace(runtime: object) -> tuple[str, ...]:
-    context = _run_context(runtime)
-    return (context.project_id, context.owner_id, "memos")
 
 
 class WorkspaceMappedDaytonaSandbox(BaseSandbox):
@@ -436,8 +473,7 @@ def get_context_daytona_backend() -> BackendProtocol:
             "/skills/": FilesystemBackend(root_dir=_RESOURCE_ROOT / "skills", virtual_mode=True),
             "/memory/": FilesystemBackend(root_dir=_RESOURCE_ROOT / "memory", virtual_mode=True),
             "/memories/user/": StoreBackend(namespace=_user_memory_namespace),
-            "/memories/workspace/": StoreBackend(namespace=_thread_memory_namespace),
-            "/memos/": StoreBackend(namespace=_memo_namespace),
+            "/memories/project/": StoreBackend(namespace=_project_memory_namespace),
         },
         artifacts_root="/workspace/artifacts",
     )
@@ -459,8 +495,8 @@ class ContextDaytonaSandbox(BaseSandbox):
 
     def _backend(self) -> WorkspaceMappedDaytonaSandbox:
         context = self._context()
-        backend = get_daytona_backend_for_thread(
-            thread_id=context.thread_id,
+        backend = get_daytona_backend_for_project(
+            owner_id=context.owner_id,
             project_id=context.project_id,
             expected_sandbox_id=getattr(context, "expected_sandbox_id", None),
         )
@@ -477,7 +513,7 @@ class ContextDaytonaSandbox(BaseSandbox):
                 }
             )
         hydration_marker = (
-            context.thread_id,
+            context.project_id,
             backend.id,
             tuple(sorted(context.input_asset_ids)),
         )
@@ -488,7 +524,7 @@ class ContextDaytonaSandbox(BaseSandbox):
         if should_hydrate:
             assets = _asset_store().require_ready_inputs(
                 owner_id=context.owner_id,
-                thread_id=context.thread_id,
+                project_id=context.project_id,
                 asset_ids=context.input_asset_ids,
             )
             uploads: list[tuple[str, bytes]] = []
@@ -644,46 +680,54 @@ class ContextDaytonaSandbox(BaseSandbox):
         return await asyncio.to_thread(self.glob, pattern, path)
 
 
-def get_daytona_backend_for_thread(
+def get_daytona_backend_for_project(
     *,
-    thread_id: str,
+    owner_id: str,
     project_id: str,
     expected_sandbox_id: str | None = None,
 ) -> WorkspaceMappedDaytonaSandbox:
     """Resolve a Daytona backend when no Deep Agents ToolRuntime is available."""
 
-    cache_key = (project_id, thread_id)
+    cache_key = (owner_id, project_id)
     with _LOCK:
         if cached := _RESOLVED_BACKENDS.get(cache_key):
             if expected_sandbox_id and cached.id != expected_sandbox_id:
-                raise RuntimeError("cached Daytona sandbox does not match the runtime binding")
+                current = _project_store().get_project(
+                    owner_id=owner_id,
+                    project_id=project_id,
+                )
+                if current.sandbox_id != cached.id:
+                    raise RuntimeError("cached Daytona sandbox does not match the runtime binding")
             return cached
 
         client = _client()
-        labels = {
-            "app": "langalpha-next",
-            "thread_id": thread_id,
-            "project_id": project_id,
-        }
+        labels = _sandbox_labels(owner_id, project_id)
+        missing_sandbox_id: str | None = None
         if expected_sandbox_id:
             try:
                 existing = client.get(expected_sandbox_id)
-            except Exception as exc:
-                raise RuntimeError(
-                    "bound Daytona sandbox is unavailable; refusing to create an empty workspace"
-                ) from exc
-            existing_labels = getattr(existing, "labels", {}) or {}
-            if any(existing_labels.get(key) != value for key, value in labels.items()):
-                raise RuntimeError("bound Daytona sandbox labels do not match workspace")
+            except DaytonaNotFoundError:
+                missing_sandbox_id = expected_sandbox_id
+                existing = next(
+                    (
+                        sandbox
+                        for sandbox in client.list(ListSandboxesQuery(labels=labels, limit=10))
+                        if sandbox.id != expected_sandbox_id
+                    ),
+                    None,
+                )
+            if existing is not None:
+                _validate_sandbox_labels(existing, labels)
         else:
             existing = next(iter(client.list(ListSandboxesQuery(labels=labels, limit=1))), None)
 
+        created_replacement = False
         if existing is None:
             settings = get_settings()
             existing = client.create(
                 CreateSandboxFromSnapshotParams(
                     language="python",
-                    name=_sandbox_name(thread_id),
+                    name=_sandbox_name(project_id),
                     labels=labels,
                     auto_stop_interval=settings.daytona_auto_stop_minutes,
                     auto_archive_interval=settings.daytona_auto_archive_minutes,
@@ -693,21 +737,71 @@ def get_daytona_backend_for_thread(
                 ),
                 timeout=120,
             )
+            created_replacement = missing_sandbox_id is not None
         else:
             _ensure_started(existing)
 
-        delegate = DaytonaSandbox(
-            sandbox=existing,
-            timeout=get_settings().max_run_seconds,
-        )
-        work_dir = str(existing.get_work_dir()).rstrip("/")
-        backend = WorkspaceMappedDaytonaSandbox(
-            delegate,
-            f"{work_dir}/langalpha-workspace",
-        )
-        created = backend.execute("mkdir -p /workspace", timeout=120)
-        if created.exit_code != 0:
-            raise RuntimeError("failed to initialize Daytona writable workspace")
+        try:
+            delegate = DaytonaSandbox(
+                sandbox=existing,
+                timeout=get_settings().max_run_seconds,
+            )
+            work_dir = str(existing.get_work_dir()).rstrip("/")
+            backend = WorkspaceMappedDaytonaSandbox(
+                delegate,
+                f"{work_dir}/langalpha-workspace",
+            )
+            created = backend.execute("mkdir -p /workspace", timeout=120)
+            if created.exit_code != 0:
+                raise RuntimeError("failed to initialize Daytona writable workspace")
+
+            project_store = _project_store()
+            if missing_sandbox_id:
+                _restore_project_assets(
+                    backend=backend,
+                    owner_id=owner_id,
+                    project_id=project_id,
+                )
+                project = project_store.replace_sandbox(
+                    owner_id=owner_id,
+                    project_id=project_id,
+                    expected_sandbox_id=missing_sandbox_id,
+                    sandbox_id=backend.id,
+                )
+            else:
+                project = project_store.bind_sandbox(
+                    owner_id=owner_id,
+                    project_id=project_id,
+                    sandbox_id=backend.id,
+                )
+        except Exception:
+            if created_replacement:
+                try:
+                    client.delete(existing, timeout=120, wait=True)
+                except Exception:
+                    pass
+            raise
+
+        if project.sandbox_id != backend.id:
+            if created_replacement:
+                try:
+                    client.delete(existing, timeout=120, wait=True)
+                except Exception:
+                    pass
+            if not project.sandbox_id:
+                raise RuntimeError("project recovery returned no sandbox binding")
+            winner = client.get(project.sandbox_id)
+            _validate_sandbox_labels(winner, labels)
+            _ensure_started(winner)
+            delegate = DaytonaSandbox(
+                sandbox=winner,
+                timeout=get_settings().max_run_seconds,
+            )
+            work_dir = str(winner.get_work_dir()).rstrip("/")
+            backend = WorkspaceMappedDaytonaSandbox(
+                delegate,
+                f"{work_dir}/langalpha-workspace",
+            )
         _RESOLVED_BACKENDS[cache_key] = backend
         return backend
 
@@ -715,29 +809,23 @@ def get_daytona_backend_for_thread(
 def delete_daytona_sandbox(
     *,
     sandbox_id: str,
-    thread_id: str,
+    owner_id: str,
     project_id: str,
 ) -> None:
     """Delete the sandbox only after verifying its ownership labels."""
 
     client = _client()
     sandbox = client.get(sandbox_id)
-    expected = {
-        "app": "langalpha-next",
-        "thread_id": thread_id,
-        "project_id": project_id,
-    }
-    labels = getattr(sandbox, "labels", {}) or {}
-    if any(labels.get(key) != value for key, value in expected.items()):
-        raise RuntimeError("Daytona sandbox labels do not match the thread")
+    expected = _sandbox_labels(owner_id, project_id)
+    _validate_sandbox_labels(sandbox, expected)
     client.delete(sandbox, timeout=120, wait=True)
     with _LOCK:
-        _RESOLVED_BACKENDS.pop((project_id, thread_id), None)
+        _RESOLVED_BACKENDS.pop((owner_id, project_id), None)
         _BOUND_EVENTS.difference_update(
             marker for marker in _BOUND_EVENTS if marker[1] == sandbox_id
         )
         _HYDRATED_INPUTS.difference_update(
-            marker for marker in _HYDRATED_INPUTS if marker[0] == thread_id
+            marker for marker in _HYDRATED_INPUTS if marker[0] == project_id
         )
 
 
@@ -750,4 +838,5 @@ def clear_backend_cache() -> None:
         _BOUND_EVENTS.clear()
         _HYDRATED_INPUTS.clear()
         _asset_store.cache_clear()
+        _project_store.cache_clear()
         _CLIENT = None

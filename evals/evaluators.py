@@ -57,13 +57,11 @@ Grade this observable trajectory:
 """
 
 
-def _searchable_output(outputs: dict[str, Any]) -> str:
+def _searchable(value: Any) -> str:
+    if isinstance(value, str):
+        return value
     return json.dumps(
-        {
-            "answer": outputs.get("answer"),
-            "structured_response": outputs.get("structured_response"),
-            "tool_results": outputs.get("tool_results"),
-        },
+        value,
         ensure_ascii=False,
         sort_keys=True,
         default=str,
@@ -143,6 +141,11 @@ def case_pass(
                 failures.append(
                     f"turn {index} task statuses {sorted(statuses)} != {expected_status}"
                 )
+        expected_run_status = (expected.get("expected_run_status_after_turn") or {}).get(str(index))
+        if expected_run_status and turn.get("status") != expected_run_status:
+            failures.append(
+                f"turn {index} run status {turn.get('status')!r} != {expected_run_status!r}"
+            )
 
     interrupt_kind = expected.get("expected_interrupt_kind")
     if interrupt_kind:
@@ -159,15 +162,6 @@ def case_pass(
         if len(tasks) != 1 or str(tasks[0].get("task_id") or "") not in answer:
             failures.append("final answer does not contain the complete task_id")
 
-    searchable = _searchable_output(outputs)
-    folded = searchable.casefold()
-    for value in expected.get("required_text") or []:
-        if str(value).casefold() not in folded:
-            failures.append(f"missing required text {value!r}")
-    for url in expected.get("required_urls") or []:
-        if url not in searchable:
-            failures.append(f"missing required source {url}")
-
     structured = outputs.get("structured_response")
     if expected.get("structured_response_required") and not isinstance(structured, dict):
         failures.append("missing structured_response")
@@ -176,6 +170,21 @@ def case_pass(
         limitations = structured.get("limitations") if isinstance(structured, dict) else []
         if not isinstance(limitations, list) or len(limitations) < minimum_limitations:
             failures.append(f"expected at least {minimum_limitations} limitation(s)")
+
+    answer = _searchable(outputs.get("answer") or "")
+    structured_output = _searchable(structured or {})
+    for value in expected.get("required_answer_text") or []:
+        if str(value).casefold() not in answer.casefold():
+            failures.append(f"answer missing required text {value!r}")
+    for url in expected.get("required_answer_urls") or []:
+        if url not in answer:
+            failures.append(f"answer missing required source {url}")
+    for value in expected.get("required_structured_text") or []:
+        if str(value).casefold() not in structured_output.casefold():
+            failures.append(f"structured response missing required text {value!r}")
+    for url in expected.get("required_structured_urls") or []:
+        if url not in structured_output:
+            failures.append(f"structured response missing required source {url}")
 
     return {
         "score": 0 if failures else 1,

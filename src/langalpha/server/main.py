@@ -6,10 +6,11 @@ from fastapi.staticfiles import StaticFiles
 
 from langalpha.assets.store import AssetStore
 from langalpha.config import Settings, get_settings
+from langalpha.projects.store import ProjectStore
 from langalpha.server.agent_gateway import AgentGateway
 from langalpha.server.auth import Authenticator
 from langalpha.server.dependencies import AppServices
-from langalpha.server.routes import assets, runs, system, threads
+from langalpha.server.routes import assets, projects, runs, system, threads
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -20,6 +21,7 @@ def create_app(
     gateway: AgentGateway | None = None,
     authenticator: Authenticator | None = None,
     asset_store: AssetStore | None = None,
+    project_store: ProjectStore | None = None,
 ) -> FastAPI:
     app_settings = settings or get_settings()
     graph = gateway or AgentGateway(
@@ -35,6 +37,7 @@ def create_app(
         graph,
         authenticator=authenticator,
         asset_store=asset_store,
+        project_store=project_store,
     )
 
     app = FastAPI(title="LangAlpha BFF", version="1.0.0")
@@ -55,6 +58,7 @@ def create_app(
         return FileResponse(web_dir / "index.html")
 
     app.include_router(system.router)
+    app.include_router(projects.router)
     app.include_router(threads.router)
     app.include_router(runs.router)
     app.include_router(assets.router)

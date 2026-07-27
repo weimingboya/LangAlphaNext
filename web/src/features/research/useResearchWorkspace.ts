@@ -18,6 +18,7 @@ import type {
   AgentProjection,
   Asset,
   AssetDownloadTicket,
+  Project,
   Run,
   Thread,
   ThreadSnapshot,
@@ -32,13 +33,16 @@ import {
 } from "./workspace-events";
 
 export interface ResearchWorkspaceState {
+  activeProject: Project | null;
   activeThread: Thread | null;
   assets: Asset[];
   cancelRun: () => Promise<void>;
   closeDrawers: () => void;
   connectRun: (threadId: string, runId: string) => void;
   contextOpen: boolean;
+  createProject: (name: string) => Promise<Project>;
   createThread: () => Promise<Thread>;
+  deleteProject: (project: Project) => Promise<void>;
   deleteThread: (thread: Thread) => Promise<void>;
   downloadAsset: (asset: Asset) => Promise<void>;
   filePickerOpen: boolean;
@@ -50,7 +54,10 @@ export interface ResearchWorkspaceState {
   notify: (message: string) => void;
   openFilePicker: (query?: string) => void;
   projection: AgentProjection;
+  projects: Project[];
+  renameProject: (project: Project, name: string) => Promise<Project>;
   resumeInterrupt: (event: AgentEvent, value: unknown) => Promise<void>;
+  selectProject: (project: Project) => Promise<void>;
   selectReference: (asset: Asset | null) => void;
   selectedReference: Asset | null;
   selectThread: (thread: Thread) => Promise<void>;
@@ -67,6 +74,8 @@ export interface ResearchWorkspaceState {
 }
 
 export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [threads, setThreads] = useState<Thread[]>([]);
   const [activeThread, setActiveThread] = useState<Thread | null>(null);
   const [projection, dispatchProjection] = useReducer(
@@ -86,6 +95,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
   const [initializeError, setInitializeError] = useState<string | null>(null);
 
   const sourceRef = useRef<EventSource | null>(null);
+  const activeProjectRef = useRef<Project | null>(null);
   const activeThreadRef = useRef<Thread | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
   const snapshotRequestIdRef = useRef(0);
@@ -93,6 +103,10 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
   const loadSnapshotRef = useRef<(threadId: string, requestId: number) => Promise<void>>(
     async () => undefined,
   );
+
+  useEffect(() => {
+    activeProjectRef.current = activeProject;
+  }, [activeProject]);
 
   useEffect(() => {
     activeThreadRef.current = activeThread;
@@ -131,6 +145,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
     (threadId: string, runId: string) => {
       sourceRef.current?.close();
       const source = new EventSource(`/api/threads/${threadId}/runs/${runId}/stream`);
+      let refreshing = false;
       sourceRef.current = source;
       const types = [
         "run.success",
@@ -168,11 +183,25 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
         });
       }
       source.onerror = () => {
-        if (source.readyState === EventSource.CLOSED) return;
+        if (source.readyState === EventSource.CLOSED || refreshing) return;
+        refreshing = true;
         notify("The live research stream was interrupted. Reconnecting…");
+        void client
+          .request<{ id: string }>("/api/auth/me")
+          .then(() => {
+            source.close();
+            if (sourceRef.current === source) sourceRef.current = null;
+            return loadSnapshotRef.current(threadId, snapshotRequestIdRef.current);
+          })
+          .catch((reason: unknown) => {
+            notify(reason instanceof Error ? reason.message : String(reason));
+          })
+          .finally(() => {
+            refreshing = false;
+          });
       };
     },
-    [addAsset, notify, recordEvent],
+    [addAsset, client, notify, recordEvent],
   );
 
   const loadSnapshot = useCallback(
@@ -268,7 +297,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
           ),
         );
       }
-      setAssets(snapshot.assets);
+      setAssets(snapshot.assets.filter((asset) => asset.status === "ready"));
 
       const active = snapshot.runs.find((run) =>
         ["pending", "running"].includes(run.status),
@@ -330,16 +359,105 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
     }
   }, []);
 
+  const selectProject = useCallback(
+    async (project: Project) => {
+      snapshotRequestIdRef.current += 1;
+      sourceRef.current?.close();
+      sourceRef.current = null;
+      activeProjectRef.current = project;
+      activeThreadRef.current = null;
+      activeRunIdRef.current = null;
+      setActiveProject(project);
+      setActiveThread(null);
+      setThreads([]);
+      setAssets([]);
+      setSelectedReference(null);
+      setHtmlPreview(null);
+      setFilePickerOpen(false);
+      dispatchProjection({ type: "reset" });
+
+      const [projectThreads, projectAssets] = await Promise.all([
+        client.request<Thread[]>(`/api/projects/${project.id}/threads`),
+        client.request<Asset[]>(`/api/projects/${project.id}/assets`),
+      ]);
+      if (activeProjectRef.current?.id !== project.id) return;
+      setThreads(projectThreads);
+      setAssets(projectAssets.filter((asset) => asset.status === "ready"));
+      if (projectThreads.length) await selectThread(projectThreads[0]);
+    },
+    [client, selectThread],
+  );
+
+  const createProject = useCallback(
+    async (name: string): Promise<Project> => {
+      const project = await client.request<Project>("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      setProjects((current) => [project, ...current]);
+      await selectProject(project);
+      return project;
+    },
+    [client, selectProject],
+  );
+
+  const ensureProject = useCallback(async (): Promise<Project> => {
+    return activeProjectRef.current || createProject("My Research");
+  }, [createProject]);
+
   const createThread = useCallback(async (): Promise<Thread> => {
-    const thread = await client.request<Thread>("/api/threads", {
+    const project = await ensureProject();
+    const thread = await client.request<Thread>(
+      `/api/projects/${project.id}/threads`,
+      {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: "New research" }),
-    });
+      },
+    );
     setThreads((current) => [thread, ...current]);
     await selectThread(thread);
     return thread;
-  }, [client, selectThread]);
+  }, [client, ensureProject, selectThread]);
+
+  const renameProject = useCallback(
+    async (project: Project, name: string): Promise<Project> => {
+      const updated = await client.request<Project>(`/api/projects/${project.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      setProjects((current) =>
+        current.map((candidate) => (candidate.id === updated.id ? updated : candidate)),
+      );
+      if (activeProjectRef.current?.id === updated.id) {
+        activeProjectRef.current = updated;
+        setActiveProject(updated);
+      }
+      return updated;
+    },
+    [client],
+  );
+
+  const deleteProject = useCallback(
+    async (project: Project) => {
+      await client.request<void>(`/api/projects/${project.id}`, { method: "DELETE" });
+      const remaining = projects.filter((candidate) => candidate.id !== project.id);
+      setProjects(remaining);
+      if (activeProjectRef.current?.id === project.id) {
+        activeProjectRef.current = null;
+        setActiveProject(null);
+        setThreads([]);
+        setActiveThread(null);
+        setAssets([]);
+        dispatchProjection({ type: "reset" });
+        if (remaining.length) await selectProject(remaining[0]);
+      }
+      notify("Project deleted");
+    },
+    [client, notify, projects, selectProject],
+  );
 
   const ensureThread = useCallback(async (): Promise<Thread> => {
     return activeThreadRef.current || createThread();
@@ -519,8 +637,8 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
 
   const uploadFile = useCallback(
     async (file: File): Promise<Asset> => {
-      const thread = await ensureThread();
-      const asset = await uploadAsset(client, thread, file);
+      const project = await ensureProject();
+      const asset = await uploadAsset(client, project, file);
       addAsset(asset);
       setSelectedReference(asset);
       setFilePickerOpen(false);
@@ -528,7 +646,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
       notify(`${asset.filename} uploaded and referenced`);
       return asset;
     },
-    [addAsset, client, ensureThread, notify],
+    [addAsset, client, ensureProject, notify],
   );
 
   const downloadAsset = useCallback(
@@ -555,11 +673,21 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
   useEffect(() => {
     let active = true;
     client
-      .request<Thread[]>("/api/threads")
+      .request<Project[]>("/api/projects")
       .then(async (items) => {
         if (!active) return;
-        setThreads(items);
-        if (items.length) await selectThread(items[0]);
+        let available = items;
+        if (!available.length) {
+          const created = await client.request<Project>("/api/projects", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: "My Research" }),
+          });
+          available = [created];
+        }
+        if (!active) return;
+        setProjects(available);
+        await selectProject(available[0]);
       })
       .catch((reason: unknown) => {
         if (active) {
@@ -573,7 +701,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
       active = false;
       sourceRef.current?.close();
     };
-  }, [client, selectThread]);
+  }, [client, selectProject]);
 
   useEffect(
     () => () => {
@@ -585,13 +713,16 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
 
   return useMemo(
     () => ({
+      activeProject,
       activeThread,
       assets,
       cancelRun,
       closeDrawers,
       connectRun,
       contextOpen,
+      createProject,
       createThread,
+      deleteProject,
       deleteThread,
       downloadAsset,
       filePickerOpen,
@@ -603,7 +734,10 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
       notify,
       openFilePicker,
       projection,
+      projects,
+      renameProject,
       resumeInterrupt,
+      selectProject,
       selectReference: setSelectedReference,
       selectedReference,
       selectThread,
@@ -619,13 +753,16 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
       uploadFile,
     }),
     [
+      activeProject,
       activeThread,
       assets,
       cancelRun,
       closeDrawers,
       connectRun,
       contextOpen,
+      createProject,
       createThread,
+      deleteProject,
       deleteThread,
       downloadAsset,
       filePickerOpen,
@@ -637,7 +774,10 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
       notify,
       openFilePicker,
       projection,
+      projects,
+      renameProject,
       resumeInterrupt,
+      selectProject,
       selectedReference,
       selectThread,
       submitMessage,

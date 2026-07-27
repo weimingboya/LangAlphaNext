@@ -298,6 +298,9 @@ class AgentGateway:
     def __init__(self, server_url: str, *, api_key: str | None = None) -> None:
         self.client = get_client(url=server_url, api_key=api_key)
 
+    async def healthcheck(self, assistant_id: str) -> None:
+        await self.client.assistants.get(assistant_id)
+
     async def create_thread(
         self,
         *,

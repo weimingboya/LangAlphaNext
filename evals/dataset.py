@@ -48,7 +48,7 @@ def sync_dataset(
                 "LangAlpha Agent Harness core evaluation cases. "
                 "Deterministic fixtures; production traces are not required."
             ),
-            metadata={"fixture_version": "2026-07-26.v1"},
+            metadata={"fixture_version": "2026-07-27.v1"},
         )
 
     remote_by_case = {

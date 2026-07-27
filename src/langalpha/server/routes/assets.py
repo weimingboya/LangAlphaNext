@@ -30,24 +30,24 @@ _HTML_ASSET_CSP = (
 
 
 @router.post(
-    "/threads/{thread_id}/assets/uploads",
+    "/projects/{project_id}/assets/uploads",
     response_model=AssetUploadTicket,
     status_code=201,
 )
 async def create_asset_upload(
-    thread_id: str,
+    project_id: str,
     body: AssetUploadCreate,
     user: UserDep,
     services: ServicesDep,
 ) -> AssetUploadTicket:
-    thread = await services.require_thread(thread_id, user)
+    project = await services.require_project(project_id, user)
     if body.size_bytes > services.settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail="file exceeds upload limit")
     try:
         return await asyncio.to_thread(
             services.asset_store.create_upload,
             owner_id=user.id,
-            thread_id=thread.id,
+            project_id=project.id,
             request=body,
         )
     except Exception as exc:
@@ -72,18 +72,18 @@ async def complete_asset_upload(
         raise asset_http_error(exc) from exc
 
 
-@router.get("/threads/{thread_id}/assets", response_model=list[Asset])
+@router.get("/projects/{project_id}/assets", response_model=list[Asset])
 async def list_assets(
-    thread_id: str,
+    project_id: str,
     user: UserDep,
     services: ServicesDep,
 ) -> list[Asset]:
-    thread = await services.require_thread(thread_id, user)
+    project = await services.require_project(project_id, user)
     try:
         return await asyncio.to_thread(
             services.asset_store.list_assets,
             owner_id=user.id,
-            thread_id=thread.id,
+            project_id=project.id,
         )
     except Exception as exc:
         raise asset_http_error(exc) from exc

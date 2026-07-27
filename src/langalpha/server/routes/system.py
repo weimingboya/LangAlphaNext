@@ -1,3 +1,4 @@
+import asyncio
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException
@@ -53,6 +54,21 @@ async def ready(services: ServicesDep) -> dict[str, str]:
         raise HTTPException(
             status_code=503,
             detail={"status": "not_ready", "missing_or_invalid": issues},
+        )
+    checks = await asyncio.gather(
+        services.gateway.healthcheck(services.settings.langgraph_assistant_id),
+        asyncio.to_thread(services.project_store.healthcheck),
+        return_exceptions=True,
+    )
+    unavailable = [
+        name
+        for name, result in zip(("LANGGRAPH", "SUPABASE"), checks, strict=True)
+        if isinstance(result, BaseException)
+    ]
+    if unavailable:
+        raise HTTPException(
+            status_code=503,
+            detail={"status": "not_ready", "unavailable": unavailable},
         )
     return {"status": "ready"}
 

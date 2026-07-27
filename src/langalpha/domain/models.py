@@ -10,6 +10,27 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+ProjectStatus = Literal["active", "deleting", "deleted"]
+
+
+class ProjectCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
+class ProjectPatch(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
+class ProjectView(BaseModel):
+    id: str
+    owner_id: str
+    name: str
+    sandbox_id: str | None = None
+    status: ProjectStatus = "active"
+    created_at: datetime
+    updated_at: datetime
+
+
 class ThreadCreate(BaseModel):
     title: str = Field(default="New research", min_length=1, max_length=200)
 
@@ -76,27 +97,23 @@ class UsageSummary(BaseModel):
     estimated_cost_usd: float | None = None
 
 
-AssetRole = Literal["input", "artifact", "dataset", "workspace"]
+AssetRole = Literal["input", "artifact"]
 AssetStatus = Literal["uploading", "ready", "failed", "deleted"]
-RetentionClass = Literal["temporary", "standard", "pinned"]
 
 
 class Asset(BaseModel):
     id: str
     owner_id: str
-    thread_id: str
-    turn_id: str | None = None
+    project_id: str
     role: AssetRole
     status: AssetStatus
     logical_key: str
-    bucket_id: str
     object_path: str
     sandbox_path: str | None = None
     filename: str
     media_type: str
     size_bytes: int | None = None
     sha256: str | None = None
-    retention_class: RetentionClass = "standard"
     created_at: datetime
     updated_at: datetime
 
@@ -110,6 +127,7 @@ class AssetUploadCreate(BaseModel):
 
 class AssetUploadTicket(BaseModel):
     asset: Asset
+    bucket_name: str
     signed_url: str
     token: str
     tus_endpoint: str

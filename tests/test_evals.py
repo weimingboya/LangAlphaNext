@@ -8,12 +8,12 @@ from evals.evaluators import case_pass
 from evals.runner import normalize_trajectory
 
 
-def test_eval_dataset_has_six_versioned_core_cases() -> None:
+def test_eval_dataset_has_versioned_protocol_and_policy_cases() -> None:
     examples = load_dataset()
 
-    assert len(examples) == 6
-    assert {example["metadata"]["tier"] for example in examples} == {"core"}
-    assert {example["metadata"]["fixture_version"] for example in examples} == {"2026-07-26.v1"}
+    assert len(examples) == 10
+    assert {example["metadata"]["tier"] for example in examples} == {"core", "policy"}
+    assert {example["metadata"]["fixture_version"] for example in examples} == {"2026-07-27.v1"}
     assert {example["inputs"]["case_id"] for example in examples} == {
         "simple_financial_concept",
         "single_sec_fact",
@@ -21,6 +21,10 @@ def test_eval_dataset_has_six_versioned_core_cases() -> None:
         "async_research_start",
         "complex_async_research",
         "researcher_source_conflict",
+        "policy_direct_sec",
+        "policy_direct_macro",
+        "policy_complex_delegation",
+        "policy_source_authority",
     }
 
 
@@ -124,6 +128,60 @@ def test_case_pass_enforces_async_turn_boundaries_and_evidence() -> None:
     result = case_pass(example["inputs"], output, example["outputs"])
     assert result["score"] == 0
     assert "turn 0 called forbidden tool check_async_task" in result["comment"]
+
+
+def test_case_pass_requires_user_visible_answer_not_only_tool_evidence() -> None:
+    example = next(
+        item for item in load_dataset() if item["inputs"]["case_id"] == "single_sec_fact"
+    )
+    output = {
+        "answer": "I found the company record.",
+        "main_tool_calls": [{"name": "sec_resolve_company"}],
+        "researcher_tool_calls": [],
+        "turns": [],
+        "tasks": [],
+        "tool_results": [
+            {
+                "name": "sec_resolve_company",
+                "status": "success",
+                "result": {
+                    "records": [{"cik": "0000320193"}],
+                    "source": "https://www.sec.gov/files/company_tickers.json",
+                },
+            }
+        ],
+        "error": None,
+    }
+
+    result = case_pass(example["inputs"], output, example["outputs"])
+
+    assert result["score"] == 0
+    assert "answer missing required text '0000320193'" in result["comment"]
+    assert "answer missing required source" in result["comment"]
+
+
+def test_case_pass_accepts_expected_hitl_interrupt_status() -> None:
+    example = next(
+        item for item in load_dataset() if item["inputs"]["case_id"] == "missing_entity_hitl"
+    )
+    output = {
+        "answer": "",
+        "main_tool_calls": [{"name": "ask_user"}],
+        "researcher_tool_calls": [],
+        "turns": [
+            {
+                "status": "interrupted",
+                "tool_calls": [{"name": "ask_user"}],
+                "tasks": [],
+                "interrupts": [{"kind": "ask_user"}],
+            }
+        ],
+        "tasks": [],
+        "tool_results": [],
+        "error": None,
+    }
+
+    assert case_pass(example["inputs"], output, example["outputs"])["score"] == 1
 
 
 def test_eval_langgraph_config_uses_fixture_graphs() -> None:

@@ -355,10 +355,7 @@ async def sec_get_company_facts(
     source = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
     async with _client() as client:
         payload = (await _get(client, source)).json()
-    requested = {
-        value.rsplit(":", maxsplit=1)[-1].casefold()
-        for value in concepts
-    }
+    requested = {value.rsplit(":", maxsplit=1)[-1].casefold() for value in concepts}
     normalized_forms = {value.upper() for value in forms or []}
     records = []
     facts = payload.get("facts") or {}

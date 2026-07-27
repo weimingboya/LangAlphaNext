@@ -8,18 +8,18 @@ LangAlpha has one Deep Agents harness and five explicit infrastructure owners:
 |---|---|
 | Thread, run, checkpoint, message, interrupt, queue | LangGraph Agent Server |
 | User identity and access token | Supabase Auth |
-| Asset registry and durable file bytes | Supabase Postgres + private Storage |
+| Project, sandbox binding, Asset registry and durable file bytes | Supabase Postgres + private Storage |
 | Ephemeral computation and working files | Daytona |
 | Traces and evaluations | LangSmith |
 | Product API, authorization checks and UI | FastAPI on Vercel |
 
-There is no SQLite product database, Thread mirror, runtime binding table, Run
-mirror, guidance queue or event outbox.
+There is no SQLite product database, Thread mirror, Run mirror, guidance queue
+or event outbox. Supabase stores only Projects and Assets.
 
 The public Thread ID is the LangGraph `thread_id`. Thread metadata contains the
-server-written `owner_id`, `project_id`, `title`, `schema_version` and optional
-`sandbox_id`. Every operation reads that metadata and checks the authenticated
-Supabase user before accessing the Thread.
+server-written `owner_id`, `project_id`, `title` and `schema_version`. Every
+operation checks that metadata and the authoritative Project owner before
+accessing the Thread. The Project row owns the Daytona `sandbox_id`.
 
 ## Repository boundaries
 
@@ -75,6 +75,19 @@ builds one snapshot from Agent Server state and run history plus the Supabase
 Asset registry. Normalized todo updates drive the Plan section in the existing
 Context rail.
 
+## Agent context and memory
+
+The main graph loads three small memory layers on every run:
+
+- `/memory/AGENTS.md`: developer-owned, read-only operating conventions;
+- `/memories/user/MEMORY.md`: durable preferences shared by one user across Projects;
+- `/memories/project/MEMORY.md`: durable context shared by all Threads in one Project.
+
+Missing writable memory files are initialized with small Markdown templates
+before the first main-agent model call for that user and Project. Existing
+files are never overwritten. Thread history remains in LangGraph checkpoints;
+detailed workflows remain in on-demand Skills.
+
 ## Research capabilities
 
 OpenAI Responses web search is the only general-web provider. The main graph
@@ -114,11 +127,12 @@ Threads.
 
 ## Assets and Daytona
 
-The `assets` table is the only product persistence table. Input bytes and
-generated artifacts live in the private `langalpha-assets` bucket under:
+The `projects` and `assets` tables are the only product persistence tables.
+Input bytes and generated artifacts live in the private `langalpha-assets`
+bucket under:
 
 ```text
-{owner_id}/{thread_id}/{asset_id}/{sha256}/{filename}
+{owner_id}/{project_id}/{asset_id}/{sha256}/{filename}
 ```
 
 Small browser files use signed direct uploads. Files over 6 MiB use Supabase
@@ -132,9 +146,14 @@ uploads an immutable Supabase object, atomically updates the Asset row, and only
 then emits `asset.ready`.
 Daytona is therefore disposable rather than permanent storage.
 
-Sandbox resolution is deterministic by `thread_id` labels. The Agent host
-persists `sandbox_id` directly to LangGraph Thread metadata; it does not depend
-on a browser stream being connected. Label mismatches fail closed.
+Sandbox resolution is deterministic by owner and Project labels. All Threads
+in one Project share its workspace. The Agent host persists `sandbox_id`
+directly to the Supabase Project row before caching the backend; it does not
+depend on a browser stream being connected. Label mismatches fail closed. If a
+bound sandbox is confirmed deleted, the host creates a replacement, restores
+ready inputs and `/workspace/artifacts` from Supabase Storage, and conditionally
+swaps the Project binding only after hydration succeeds. Other workspace paths
+are temporary and are not restored.
 
 ## Deployment
 
@@ -144,7 +163,8 @@ points to the deployed LangGraph Agent Server. Supabase migrations provision
 the private Asset registry and bucket. Server secrets exist only in Vercel and
 the Agent Server host.
 
-Default Daytona lifecycle is stop after 60 idle minutes, archive after seven
-days and delete after 30 days. Thread deletion explicitly cancels active runs,
-deletes durable Assets, verifies and deletes its Daytona sandbox, then deletes
-the LangGraph Thread.
+Default Daytona lifecycle is stop after 60 idle minutes and archive after seven
+days; deletion is explicit with the Project. Thread deletion cancels its runs and child
+researchers but preserves Project files and the shared sandbox. Project
+deletion cancels and deletes all Threads, deletes durable Assets, verifies and
+deletes the Daytona sandbox, then tombstones the Project row.

@@ -154,6 +154,7 @@ class CompactAsyncSubAgentMiddleware(AsyncSubAgentMiddleware):
             return "Async research requires a server-issued RunContext."
         metadata = {
             "schema_version": 1,
+            "app_id": context.app_id,
             "project_id": context.project_id,
             "owner_id": context.owner_id,
             "parent_thread_id": context.thread_id,
@@ -167,6 +168,7 @@ class CompactAsyncSubAgentMiddleware(AsyncSubAgentMiddleware):
     @staticmethod
     def _child_context(context: RunContext, thread_id: str) -> dict[str, Any]:
         return {
+            "app_id": context.app_id,
             "project_id": context.project_id,
             "owner_id": context.owner_id,
             "thread_id": thread_id,

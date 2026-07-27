@@ -146,6 +146,7 @@ async def test_async_task_inherits_parent_ownership_and_context(monkeypatch) -> 
         "thread",
         {
             "schema_version": 1,
+            "app_id": "langalpha",
             "project_id": "project",
             "owner_id": "owner",
             "parent_thread_id": "parent-thread",
@@ -159,6 +160,7 @@ async def test_async_task_inherits_parent_ownership_and_context(monkeypatch) -> 
     assert isinstance(run_kwargs, dict)
     assert run_kwargs["metadata"]["parent_thread_id"] == "parent-thread"
     assert run_kwargs["context"] == {
+        "app_id": "langalpha",
         "project_id": "project",
         "owner_id": "owner",
         "thread_id": "child-thread",

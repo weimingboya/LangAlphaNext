@@ -1,25 +1,37 @@
 import { useState } from "react";
 
-import type { Thread } from "../../domain/types";
+import type { Project, Thread } from "../../domain/types";
 import { CloseIcon, PlusIcon, TrashIcon } from "../../shared/ui/icons";
 
 interface ThreadRailProps {
+  activeProject: Project | null;
   activeThreadId?: string;
   onClose: () => void;
   onCreate: () => void;
+  onCreateProject: (name: string) => Promise<void>;
   onDelete: (thread: Thread) => Promise<void>;
+  onDeleteProject: (project: Project) => Promise<void>;
+  onRenameProject: (project: Project, name: string) => Promise<void>;
+  onSelectProject: (project: Project) => Promise<void>;
   onSignOut: () => Promise<void>;
   onSelect: (thread: Thread) => void;
+  projects: Project[];
   threads: Thread[];
 }
 
 export function ThreadRail({
+  activeProject,
   activeThreadId,
   onClose,
   onCreate,
+  onCreateProject,
   onDelete,
+  onDeleteProject,
+  onRenameProject,
+  onSelectProject,
   onSignOut,
   onSelect,
+  projects,
   threads,
 }: ThreadRailProps) {
   const [confirmingThreadId, setConfirmingThreadId] = useState<string | null>(null);
@@ -50,6 +62,63 @@ export function ThreadRail({
           <CloseIcon />
         </button>
       </div>
+      <div className="project-switcher">
+        <select
+          aria-label="Current project"
+          value={activeProject?.id || ""}
+          onChange={(event) => {
+            const project = projects.find((item) => item.id === event.target.value);
+            if (project) void onSelectProject(project);
+          }}
+        >
+          {projects.map((project) => (
+            <option key={project.id} value={project.id}>
+              {project.name}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          title="New project"
+          aria-label="New project"
+          onClick={() => {
+            const name = window.prompt("Project name", "New Project")?.trim();
+            if (name) void onCreateProject(name);
+          }}
+        >
+          <PlusIcon />
+        </button>
+      </div>
+      {activeProject ? (
+        <div className="project-actions">
+          <button
+            type="button"
+            onClick={() => {
+              const name = window.prompt("Rename project", activeProject.name)?.trim();
+              if (name && name !== activeProject.name) {
+                void onRenameProject(activeProject, name);
+              }
+            }}
+          >
+            Rename
+          </button>
+          <button
+            type="button"
+            className="project-delete"
+            onClick={() => {
+              if (
+                window.confirm(
+                  `Delete “${activeProject.name}” and all of its research and files?`,
+                )
+              ) {
+                void onDeleteProject(activeProject);
+              }
+            }}
+          >
+            Delete project
+          </button>
+        </div>
+      ) : null}
       <button className="new-thread" type="button" onClick={onCreate}>
         <PlusIcon />
         <span>New research</span>

@@ -66,7 +66,7 @@ always remains an Agent Server cursor.
 
 `asset.ready` is emitted only after Storage upload and Asset-row persistence
 succeed. `sandbox.bound` is informational: the Agent host itself persists the
-binding to Thread metadata.
+binding to the Supabase Project row.
 
 ## Reload
 
@@ -82,7 +82,7 @@ The snapshot combines:
 - widgets reconstructed server-side from `show_widget` ToolMessages;
 - AI message usage metadata;
 - OpenAI `web_search_call` actions, counted separately from model tokens;
-- ready/uploading/failed Supabase Assets for the Thread.
+- ready/uploading/failed Supabase Assets for the Thread's Project.
 
 It never scans Daytona to reconstruct durable product state.
 

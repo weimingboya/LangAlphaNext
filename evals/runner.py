@@ -264,7 +264,8 @@ class AgentServerEvalTarget:
         message: str,
         case_id: str,
         turn_index: int,
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
+    ) -> tuple[dict[str, Any], dict[str, Any], float]:
+        started = time.monotonic()
         turn_id = str(uuid4())
         kwargs: dict[str, Any] = {
             "input": {"messages": [{"role": "user", "content": message}]},
@@ -292,7 +293,7 @@ class AgentServerEvalTarget:
             self._client.runs.get(thread_id, run_id),
             self._client.threads.get_state(thread_id, subgraphs=True),
         )
-        return _as_dict(remote), _as_dict(state)
+        return _as_dict(remote), _as_dict(state), time.monotonic() - started
 
     async def run(self, inputs: dict[str, Any]) -> dict[str, Any]:
         started = time.monotonic()
@@ -329,12 +330,19 @@ class AgentServerEvalTarget:
                     )
                 task_ids = list(tasks_before)
                 message = turn["message"].format(task_id=task_ids[0] if len(task_ids) == 1 else "")
-                remote, final_state = await self._run_turn(
+                remote, final_state, turn_latency = await self._run_turn(
                     thread_id=thread_id,
                     graph=graph,
                     message=message,
                     case_id=case_id,
                     turn_index=turn_index,
+                )
+                interrupts = _interrupts(final_state)
+                remote_status = str(remote.get("status") or "unknown")
+                effective_status = (
+                    "interrupted"
+                    if interrupts and remote_status in {"success", "interrupted"}
+                    else remote_status
                 )
                 all_main_messages = _messages(final_state)
                 new_messages = all_main_messages[previous_message_count:]
@@ -348,9 +356,10 @@ class AgentServerEvalTarget:
                         "index": turn_index,
                         "run_id": str(remote.get("run_id") or ""),
                         "trace_id": str(remote.get("trace_id") or remote.get("run_id") or ""),
-                        "status": str(remote.get("status") or "unknown"),
+                        "status": effective_status,
+                        "latency_seconds": round(turn_latency, 3),
                         "answer": _last_answer(new_messages),
-                        "interrupts": _interrupts(final_state),
+                        "interrupts": interrupts,
                         "tool_calls": _tool_calls(
                             new_messages,
                             actor=graph,
@@ -365,14 +374,14 @@ class AgentServerEvalTarget:
                         "tasks": list(tasks_after.values()),
                     }
                 )
-                if str(remote.get("status")) != "success":
+                if effective_status not in {"success", "interrupted"}:
                     error = (
                         f"Agent Server run {remote.get('run_id')} finished with "
-                        f"status {remote.get('status')}: "
+                        f"status {effective_status}: "
                         f"{remote.get('error') or 'no error detail returned'}"
                     )
                     break
-                if _interrupts(final_state):
+                if interrupts:
                     break
 
             final_tasks = _task_map(final_state)
@@ -509,6 +518,9 @@ class AgentServerEvalTarget:
                 "total_tokens": (main_usage["total_tokens"] + researcher_usage["total_tokens"]),
                 "main_tool_calls": len(main_tool_calls),
                 "researcher_tool_calls": len(researcher_tool_calls),
+                "first_turn_latency_seconds": (
+                    turn_records[0]["latency_seconds"] if turn_records else None
+                ),
                 "latency_seconds": round(time.monotonic() - started, 3),
             },
             "error": error,

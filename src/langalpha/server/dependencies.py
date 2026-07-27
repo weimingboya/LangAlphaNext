@@ -10,7 +10,12 @@ from langalpha.assets.store import (
     SupabaseAssetStore,
 )
 from langalpha.config import Settings
-from langalpha.domain.models import Asset, ThreadView
+from langalpha.domain.models import Asset, ProjectView, ThreadView
+from langalpha.projects.store import (
+    ProjectNotFoundError,
+    ProjectStore,
+    SupabaseProjectStore,
+)
 from langalpha.server.agent_gateway import AgentGateway
 from langalpha.server.auth import (
     AuthenticationError,
@@ -46,11 +51,13 @@ class AppServices:
         *,
         authenticator: Authenticator | None = None,
         asset_store: AssetStore | None = None,
+        project_store: ProjectStore | None = None,
     ) -> None:
         self.settings = settings
         self.gateway = gateway
         self._authenticator = authenticator
         self._asset_store = asset_store
+        self._project_store = project_store
 
     @property
     def authenticator(self) -> Authenticator:
@@ -64,6 +71,33 @@ class AppServices:
             self._asset_store = SupabaseAssetStore(self.settings)
         return self._asset_store
 
+    @property
+    def project_store(self) -> ProjectStore:
+        if self._project_store is None:
+            self._project_store = SupabaseProjectStore(self.settings)
+        return self._project_store
+
+    async def require_project(
+        self,
+        project_id: str,
+        user: AuthUser,
+        *,
+        allow_deleting: bool = False,
+    ) -> ProjectView:
+        try:
+            project = await asyncio.to_thread(
+                self.project_store.get_project,
+                owner_id=user.id,
+                project_id=project_id,
+            )
+        except (ProjectNotFoundError, LookupError) as exc:
+            raise HTTPException(status_code=404, detail="project not found") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="project storage is unavailable") from exc
+        if project.status != "active" and not (allow_deleting and project.status == "deleting"):
+            raise HTTPException(status_code=409, detail="project is not active")
+        return project
+
     async def require_thread(self, thread_id: str, user: AuthUser) -> ThreadView:
         try:
             thread = await self.gateway.get_thread(thread_id)
@@ -75,16 +109,34 @@ class AppServices:
             ) from exc
         if (
             thread.metadata.get("owner_id") != user.id
-            or thread.metadata.get("project_id") != self.settings.app_project_id
+            or thread.metadata.get("app_id") != self.settings.app_id
             or thread.metadata.get("thread_kind") == "async_subagent"
         ):
             raise HTTPException(status_code=404, detail="thread not found")
         return thread
 
+    async def require_project_thread(
+        self, project_id: str, thread_id: str, user: AuthUser
+    ) -> tuple[ProjectView, ThreadView]:
+        project, thread = await asyncio.gather(
+            self.require_project(project_id, user),
+            self.require_thread(thread_id, user),
+        )
+        if thread.metadata.get("project_id") != project.id:
+            raise HTTPException(status_code=404, detail="thread not found")
+        return project, thread
+
+    async def project_for_thread(self, thread: ThreadView, user: AuthUser) -> ProjectView:
+        project_id = thread.metadata.get("project_id")
+        if not isinstance(project_id, str):
+            raise HTTPException(status_code=404, detail="project not found")
+        return await self.require_project(project_id, user)
+
     async def require_assets(
         self,
         *,
         user: AuthUser,
+        project: ProjectView,
         thread: ThreadView,
         asset_ids: list[str],
     ) -> list[Asset]:
@@ -92,7 +144,7 @@ class AppServices:
             return await asyncio.to_thread(
                 self.asset_store.require_ready_inputs,
                 owner_id=user.id,
-                thread_id=thread.id,
+                project_id=project.id,
                 asset_ids=asset_ids,
             )
         except Exception as exc:
@@ -102,18 +154,19 @@ class AppServices:
         self,
         *,
         user: AuthUser,
+        project: ProjectView,
         thread: ThreadView,
         turn_id: str,
         input_asset_ids: list[str] | None = None,
     ) -> dict[str, object]:
-        sandbox_id = thread.metadata.get("sandbox_id")
         return {
-            "project_id": self.settings.app_project_id,
+            "app_id": self.settings.app_id,
+            "project_id": project.id,
             "owner_id": user.id,
             "thread_id": thread.id,
             "turn_id": turn_id,
             "input_asset_ids": input_asset_ids or [],
-            "expected_sandbox_id": sandbox_id if isinstance(sandbox_id, str) else None,
+            "expected_sandbox_id": project.sandbox_id,
         }
 
 

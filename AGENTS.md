@@ -8,6 +8,7 @@ This is a clean-room rewrite. Do not import runtime code from the sibling legacy
 - `create_deep_agent()` is the only agent harness constructor.
 - OpenAI is the only model provider; the default model is `gpt-5.6-luna`.
 - Daytona is the only production sandbox.
+- Each Project owns one Daytona sandbox shared by its Threads.
 - LangGraph Agent Server owns thread, run, checkpoint, interrupt, and cancellation state.
 - Product APIs expose only versioned DomainEvents, never raw provider chunks.
 - Native MCP runs outside Daytona. Large results are materialized as datasets before

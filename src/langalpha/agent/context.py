@@ -11,3 +11,4 @@ class RunContext:
     turn_id: str
     input_asset_ids: tuple[str, ...] = ()
     expected_sandbox_id: str | None = None
+    app_id: str = "langalpha"

@@ -1,4 +1,4 @@
-import type { Asset, AssetUploadTicket, Thread } from "../../domain/types";
+import type { Asset, AssetUploadTicket, Project } from "../../domain/types";
 import type { ApiClient } from "../../shared/api/api-client";
 
 async function sha256(file: File): Promise<string> {
@@ -81,7 +81,7 @@ async function uploadToSignedTicket(ticket: AssetUploadTicket, file: File): Prom
       uploadDataDuringCreation: true,
       removeFingerprintOnSuccess: true,
       metadata: {
-        bucketName: ticket.asset.bucket_id,
+        bucketName: ticket.bucket_name,
         objectName: ticket.asset.object_path,
         contentType: file.type || "application/octet-stream",
         cacheControl: "3600",
@@ -99,13 +99,13 @@ async function uploadToSignedTicket(ticket: AssetUploadTicket, file: File): Prom
 
 export async function uploadAsset(
   client: ApiClient,
-  thread: Thread,
+  project: Project,
   selectedFile: File,
 ): Promise<Asset> {
   const file = await normalizeImage(selectedFile);
   const checksum = await sha256(file);
   const ticket = await client.request<AssetUploadTicket>(
-    `/api/threads/${thread.id}/assets/uploads`,
+    `/api/projects/${project.id}/assets/uploads`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

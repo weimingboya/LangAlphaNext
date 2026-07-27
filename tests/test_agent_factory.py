@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import re
 from pathlib import Path
 
 import langalpha.agent.factory as factory_module
@@ -11,6 +12,8 @@ from langalpha.agent.factory import (
     RESEARCHER_SKILLS,
     DeepAgentFactory,
 )
+from langalpha.agent.memory import MAIN_MEMORY_FILES
+from langalpha.agent.prompts import MAIN_SYSTEM_PROMPT, RESEARCHER_SYSTEM_PROMPT
 from langalpha.agent.responses import ResearchResult
 from langalpha.config import get_settings
 
@@ -173,7 +176,7 @@ def test_filesystem_permissions_protect_read_only_product_routes() -> None:
     assert snapshot == [
         {
             "operations": ["write"],
-            "paths": ["/skills/**", "/memory/**", "/memos/**"],
+            "paths": ["/skills/**", "/memory/**"],
             "mode": "deny",
         },
     ]
@@ -196,11 +199,25 @@ def test_filesystem_permissions_protect_read_only_product_routes() -> None:
         "/skills/financial-research/",
         "/skills/sec-filing-analysis/",
     ]
+    assert MAIN_MEMORY_FILES == [
+        "/memory/AGENTS.md",
+        "/memories/user/MEMORY.md",
+        "/memories/project/MEMORY.md",
+    ]
     assert set(ResearchResult.model_fields) == {
         "summary",
         "evidence",
         "limitations",
     }
+
+
+def test_agent_prompts_are_concise_english_and_memory_is_layered() -> None:
+    assert not re.search(r"[\u3400-\u9fff]", MAIN_SYSTEM_PROMPT)
+    assert not re.search(r"[\u3400-\u9fff]", RESEARCHER_SYSTEM_PROMPT)
+    assert len(MAIN_SYSTEM_PROMPT) < 2_500
+    assert len(RESEARCHER_SYSTEM_PROMPT) < 2_000
+    assert "/memories/user/MEMORY.md" in MAIN_MEMORY_FILES
+    assert "/memories/project/MEMORY.md" in MAIN_MEMORY_FILES
 
 
 def test_langgraph_config_pins_verified_agent_server_version() -> None:

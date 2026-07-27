@@ -39,15 +39,45 @@ export function ResearchWorkspace({ client, onSignOut }: ResearchWorkspaceProps)
   return (
     <main className={className}>
       <ThreadRail
+        activeProject={workspace.activeProject}
         activeThreadId={workspace.activeThread?.id}
         onClose={() => workspace.setThreadDrawerOpen(false)}
         onCreate={() => {
           workspace.setThreadDrawerOpen(false);
           void workspace.createThread().catch(report);
         }}
+        onCreateProject={async (name) => {
+          try {
+            await workspace.createProject(name);
+          } catch (reason) {
+            report(reason);
+          }
+        }}
         onDelete={workspace.deleteThread}
+        onDeleteProject={async (project) => {
+          try {
+            await workspace.deleteProject(project);
+          } catch (reason) {
+            report(reason);
+          }
+        }}
+        onRenameProject={async (project, name) => {
+          try {
+            await workspace.renameProject(project, name);
+          } catch (reason) {
+            report(reason);
+          }
+        }}
+        onSelectProject={async (project) => {
+          try {
+            await workspace.selectProject(project);
+          } catch (reason) {
+            report(reason);
+          }
+        }}
         onSignOut={onSignOut}
         onSelect={(thread) => void workspace.selectThread(thread).catch(report)}
+        projects={workspace.projects}
         threads={workspace.threads}
       />
 

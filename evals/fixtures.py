@@ -6,7 +6,7 @@ from typing import Any
 
 from langchain.tools import tool
 
-FIXTURE_VERSION = "2026-07-26.v1"
+FIXTURE_VERSION = "2026-07-27.v1"
 
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json"

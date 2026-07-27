@@ -18,6 +18,16 @@ export interface AuthSession {
   user?: JsonObject;
 }
 
+export interface Project {
+  id: string;
+  owner_id: string;
+  name: string;
+  sandbox_id?: string | null;
+  status: "active" | "deleting" | "deleted";
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Thread {
   id: string;
   title: string;
@@ -45,31 +55,29 @@ export interface Run {
   updated_at: string;
 }
 
-export type AssetRole = "input" | "artifact" | "dataset" | "workspace";
+export type AssetRole = "input" | "artifact";
 export type AssetStatus = "uploading" | "ready" | "failed" | "deleted";
 
 export interface Asset {
   id: string;
   owner_id: string;
-  thread_id: string;
-  turn_id?: string | null;
+  project_id: string;
   role: AssetRole;
   status: AssetStatus;
   logical_key: string;
-  bucket_id: string;
   object_path: string;
   sandbox_path?: string | null;
   filename: string;
   media_type: string;
   size_bytes?: number | null;
   sha256?: string | null;
-  retention_class: "temporary" | "standard" | "pinned";
   created_at: string;
   updated_at: string;
 }
 
 export interface AssetUploadTicket {
   asset: Asset;
+  bucket_name: string;
   signed_url: string;
   token: string;
   tus_endpoint: string;
