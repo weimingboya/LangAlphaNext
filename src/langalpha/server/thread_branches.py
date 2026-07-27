@@ -51,29 +51,19 @@ def editable_content(content: object) -> str:
 
 def _latest_user_message(state: object) -> dict[str, Any] | None:
     return next(
-        (
-            message
-            for message in reversed(state_messages(state))
-            if message.get("role") == "user"
-        ),
+        (message for message in reversed(state_messages(state)) if message.get("role") == "user"),
         None,
     )
 
 
 def _state_index(history: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    return {
-        state_id: state
-        for state in history
-        if (state_id := checkpoint_id(state)) is not None
-    }
+    return {state_id: state for state in history if (state_id := checkpoint_id(state)) is not None}
 
 
 def _leaf_ids(history: list[dict[str, Any]]) -> set[str]:
     ids = set(_state_index(history))
     parent_ids = {
-        parent_id
-        for state in history
-        if (parent_id := _parent_checkpoint_id(state)) is not None
+        parent_id for state in history if (parent_id := _parent_checkpoint_id(state)) is not None
     }
     return ids - parent_ids
 
@@ -152,11 +142,7 @@ def branch_state(
         )
     options.sort(key=lambda option: (option.created_at, option.checkpoint_id))
     current_index = next(
-        (
-            index
-            for index, option in enumerate(options)
-            if option.checkpoint_id == selected_id
-        ),
+        (index for index, option in enumerate(options) if option.checkpoint_id == selected_id),
         0,
     )
     latest_user = _latest_user_message(selected_state)
@@ -212,8 +198,6 @@ def latest_user_edit(
     }
     metadata = as_dict(message_checkpoint).get("metadata")
     source_run_id = (
-        str(metadata.get("run_id"))
-        if isinstance(metadata, dict) and metadata.get("run_id")
-        else ""
+        str(metadata.get("run_id")) if isinstance(metadata, dict) and metadata.get("run_id") else ""
     )
     return _checkpoint(message_checkpoint), replacement_message, source_run_id

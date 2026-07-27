@@ -363,9 +363,7 @@ class AgentGateway:
             if checkpoint_id
             else None
         )
-        return as_dict(
-            await self.client.threads.get_state(thread_id, checkpoint=checkpoint)
-        )
+        return as_dict(await self.client.threads.get_state(thread_id, checkpoint=checkpoint))
 
     async def history(
         self,
