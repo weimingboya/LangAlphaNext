@@ -115,6 +115,30 @@ def test_projects_read_file_name_and_line_range() -> None:
     assert projected.payload["detail"] == "annual-report.pdf · lines 101-150"
 
 
+def test_projects_delete_file_activity() -> None:
+    source = source_event(
+        payload={
+            "value": [
+                {
+                    "type": "AIMessageChunk",
+                    "tool_calls": [
+                        {
+                            "id": "call-delete",
+                            "name": "delete",
+                            "args": {"file_path": "/workspace/tmp.csv"},
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+
+    [projected] = project_activity_events(source)
+
+    assert projected.payload["title"] == "Delete file"
+    assert projected.payload["detail"] == "tmp.csv"
+
+
 def test_reasoning_summary_is_not_truncated_by_the_protocol() -> None:
     reasoning = "A" * 600
     source = source_event(

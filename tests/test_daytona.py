@@ -8,6 +8,7 @@ import pytest
 from daytona import DaytonaConnectionError, DaytonaNotFoundError
 from deepagents.backends import StoreBackend
 from deepagents.backends.protocol import (
+    DeleteResult,
     EditResult,
     FileDownloadResponse,
     FileUploadResponse,
@@ -118,13 +119,30 @@ def test_workspace_adapter_maps_deep_agents_file_api_before_command_encoding() -
             calls.append(("edit", path, old_string, new_string, replace_all))
             return EditResult(path=path, occurrences=1)
 
-        def grep(self, pattern: str, path: str, glob: str | None):
-            calls.append(("grep", pattern, path, glob))
-            return GrepResult(matches=[{"path": f"{path}/data.csv", "line": 1, "text": "value"}])
+        def delete(self, path: str):
+            calls.append(("delete", path))
+            return DeleteResult(path=path)
+
+        def grep(
+            self,
+            pattern: str,
+            path: str,
+            glob: str | None,
+            *,
+            max_count: int | None,
+        ):
+            calls.append(("grep", pattern, path, glob, max_count))
+            return GrepResult(
+                matches=[{"path": f"{path}/data.csv", "line": 1, "text": "value"}],
+                truncated=True,
+            )
 
         def glob(self, pattern: str, path: str):
             calls.append(("glob", pattern, path))
-            return GlobResult(matches=[{"path": f"{path}/data.csv", "is_dir": False}])
+            return GlobResult(
+                matches=[{"path": f"{path}/data.csv", "is_dir": False}],
+                truncated=True,
+            )
 
     backend = module.WorkspaceMappedDaytonaSandbox(
         Delegate(),  # type: ignore[arg-type]
@@ -144,12 +162,17 @@ def test_workspace_adapter_maps_deep_agents_file_api_before_command_encoding() -
         ).path
         == "/workspace/artifacts/report.md"
     )
-    assert backend.grep("value", "/workspace/uploads").matches == [
+    assert backend.delete("/workspace/artifacts/report.md").path == (
+        "/workspace/artifacts/report.md"
+    )
+    grep_result = backend.grep("value", "/workspace/uploads", max_count=1)
+    assert grep_result.matches == [
         {"path": "/workspace/uploads/data.csv", "line": 1, "text": "value"}
     ]
-    assert backend.glob("**/*.csv", "/workspace").matches == [
-        {"path": "/workspace/data.csv", "is_dir": False}
-    ]
+    assert grep_result.truncated is True
+    glob_result = backend.glob("**/*.csv", "/workspace")
+    assert glob_result.matches == [{"path": "/workspace/data.csv", "is_dir": False}]
+    assert glob_result.truncated is True
     assert calls == [
         ("ls", physical_root),
         ("read", f"{physical_root}/uploads/data.csv", 0, 2000),
@@ -161,7 +184,8 @@ def test_workspace_adapter_maps_deep_agents_file_api_before_command_encoding() -
             "updated",
             False,
         ),
-        ("grep", "value", f"{physical_root}/uploads", None),
+        ("delete", f"{physical_root}/artifacts/report.md"),
+        ("grep", "value", f"{physical_root}/uploads", None, 1),
         ("glob", "**/*.csv", physical_root),
     ]
 

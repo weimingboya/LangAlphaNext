@@ -33,6 +33,7 @@ _TOOL_LABELS = {
     "start_async_task": "Start research task",
     "list_async_tasks": "Review research tasks",
     "cancel_async_task": "Cancel research task",
+    "delete": "Delete file",
     "write_file": "Create file",
 }
 

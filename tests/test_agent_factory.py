@@ -33,6 +33,7 @@ def test_factory_is_single_harness_entry_and_exposes_expected_tools(
         "read_file",
         "write_file",
         "edit_file",
+        "delete",
         "glob",
         "grep",
         "execute",
@@ -80,6 +81,7 @@ def test_factory_is_single_harness_entry_and_exposes_expected_tools(
         "ask_user",
         "submit_plan",
         "start_async_task",
+        "write_todos",
     }.isdisjoint(researcher_names)
 
     source_root = Path(__file__).resolve().parents[1] / "src"

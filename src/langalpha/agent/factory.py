@@ -13,6 +13,7 @@ from deepagents.middleware.filesystem import FilesystemPermission
 from langchain.agents.middleware import (
     ModelCallLimitMiddleware,
     ModelRetryMiddleware,
+    TodoListMiddleware,
     ToolCallLimitMiddleware,
     ToolRetryMiddleware,
 )
@@ -148,25 +149,30 @@ class DeepAgentFactory:
             settings.max_model_calls if is_main else settings.max_researcher_model_calls
         )
         tool_call_limit = settings.max_tool_calls if is_main else settings.max_researcher_tool_calls
-        middleware: list[Any] = [
-            ModelCallLimitMiddleware(
-                run_limit=model_call_limit,
-                exit_behavior="end",
-            ),
-            ToolCallLimitMiddleware(
-                run_limit=tool_call_limit,
-                exit_behavior="error",
-            ),
-            OpenAIWebSearchBudgetMiddleware(
-                max_calls=settings.openai_web_search_max_calls,
-            ),
-            ModelRetryMiddleware(
-                max_retries=3,
-                initial_delay=10,
-                max_delay=60,
-                on_failure="error",
-            ),
-        ]
+        middleware: list[Any] = []
+        if is_main:
+            middleware.append(TodoListMiddleware(system_prompt=""))
+        middleware.extend(
+            [
+                ModelCallLimitMiddleware(
+                    run_limit=model_call_limit,
+                    exit_behavior="end",
+                ),
+                ToolCallLimitMiddleware(
+                    run_limit=tool_call_limit,
+                    exit_behavior="error",
+                ),
+                OpenAIWebSearchBudgetMiddleware(
+                    max_calls=settings.openai_web_search_max_calls,
+                ),
+                ModelRetryMiddleware(
+                    max_retries=3,
+                    initial_delay=10,
+                    max_delay=60,
+                    on_failure="error",
+                ),
+            ]
+        )
         if is_main:
             middleware.append(MemoryBootstrapMiddleware(backend))
         if include_async_subagents:

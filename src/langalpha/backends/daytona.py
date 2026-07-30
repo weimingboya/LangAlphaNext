@@ -20,6 +20,7 @@ from daytona import (
 from deepagents.backends import CompositeBackend, FilesystemBackend, StoreBackend
 from deepagents.backends.protocol import (
     BackendProtocol,
+    DeleteResult,
     EditResult,
     ExecuteResponse,
     FileDownloadResponse,
@@ -416,16 +417,36 @@ class WorkspaceMappedDaytonaSandbox(BaseSandbox):
             replace_all,
         )
 
+    def delete(self, file_path: str) -> DeleteResult:
+        physical = self._physical_path(file_path)
+        if physical is None:
+            return DeleteResult(error=f"File '{file_path}': invalid_path")
+        result = self.delegate.delete(physical)
+        return DeleteResult(
+            error=self._virtualize_text(result.error),
+            path=file_path if result.path is not None else None,
+        )
+
+    async def adelete(self, file_path: str) -> DeleteResult:
+        return await asyncio.to_thread(self.delete, file_path)
+
     def grep(
         self,
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
+        *,
+        max_count: int | None = None,
     ) -> GrepResult:
         physical = self._physical_path(path or _VIRTUAL_WORKSPACE)
         if physical is None:
             return GrepResult(error=f"Path '{path}': invalid_path")
-        result = self.delegate.grep(pattern, physical, glob)
+        result = self.delegate.grep(
+            pattern,
+            physical,
+            glob,
+            max_count=max_count,
+        )
         matches = (
             [
                 {
@@ -437,15 +458,27 @@ class WorkspaceMappedDaytonaSandbox(BaseSandbox):
             if result.matches is not None
             else None
         )
-        return GrepResult(error=self._virtualize_text(result.error), matches=matches)
+        return GrepResult(
+            error=self._virtualize_text(result.error),
+            matches=matches,
+            truncated=result.truncated,
+        )
 
     async def agrep(
         self,
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
+        *,
+        max_count: int | None = None,
     ) -> GrepResult:
-        return await asyncio.to_thread(self.grep, pattern, path, glob)
+        return await asyncio.to_thread(
+            self.grep,
+            pattern,
+            path,
+            glob,
+            max_count=max_count,
+        )
 
     def glob(self, pattern: str, path: str | None = None) -> GlobResult:
         physical = self._physical_path(path or _VIRTUAL_WORKSPACE)
@@ -457,7 +490,11 @@ class WorkspaceMappedDaytonaSandbox(BaseSandbox):
             if result.matches is not None
             else None
         )
-        return GlobResult(error=self._virtualize_text(result.error), matches=matches)
+        return GlobResult(
+            error=self._virtualize_text(result.error),
+            matches=matches,
+            truncated=result.truncated,
+        )
 
     async def aglob(self, pattern: str, path: str | None = None) -> GlobResult:
         return await asyncio.to_thread(self.glob, pattern, path)
@@ -657,21 +694,41 @@ class ContextDaytonaSandbox(BaseSandbox):
             replace_all,
         )
 
+    def delete(self, file_path: str) -> DeleteResult:
+        return self._backend().delete(file_path)
+
+    async def adelete(self, file_path: str) -> DeleteResult:
+        return await self._backend().adelete(file_path)
+
     def grep(
         self,
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
+        *,
+        max_count: int | None = None,
     ) -> GrepResult:
-        return self._backend().grep(pattern, path, glob)
+        return self._backend().grep(
+            pattern,
+            path,
+            glob,
+            max_count=max_count,
+        )
 
     async def agrep(
         self,
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
+        *,
+        max_count: int | None = None,
     ) -> GrepResult:
-        return await asyncio.to_thread(self.grep, pattern, path, glob)
+        return await self._backend().agrep(
+            pattern,
+            path,
+            glob,
+            max_count=max_count,
+        )
 
     def glob(self, pattern: str, path: str | None = None) -> GlobResult:
         return self._backend().glob(pattern, path)
