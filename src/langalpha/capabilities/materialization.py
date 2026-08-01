@@ -14,8 +14,7 @@ def dataset_path(provider: str, *parts: str) -> str:
     """Build a stable private workspace path for a provider-owned dataset."""
     components = (provider, *parts)
     if not all(
-        component not in {".", ".."} and _PATH_PART.fullmatch(component)
-        for component in components
+        component not in {".", ".."} and _PATH_PART.fullmatch(component) for component in components
     ):
         raise ValueError("dataset path contains unsupported characters")
     return "/".join((DATASET_ROOT, *components))

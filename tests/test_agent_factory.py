@@ -192,9 +192,7 @@ def test_factory_bounds_filesystem_results_with_native_middleware(monkeypatch) -
 
     assert len(captured) == 1
     assert captured[0]["tool_token_limit_before_evict"] == FILESYSTEM_TOOL_TOKEN_LIMIT
-    assert captured[0]["custom_tool_descriptions"] == {
-        "read_file": READ_FILE_TOOL_DESCRIPTION
-    }
+    assert captured[0]["custom_tool_descriptions"] == {"read_file": READ_FILE_TOOL_DESCRIPTION}
     assert captured[0]["_permissions"] == list(FILESYSTEM_PERMISSIONS)
 
 

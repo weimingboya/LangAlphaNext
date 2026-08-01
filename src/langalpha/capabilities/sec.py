@@ -270,8 +270,7 @@ def _query_snippets(
         end = min(len(text), start + snippet_chars)
         start = max(0, end - snippet_chars)
         overlaps = any(
-            start < existing_end and end > existing_start
-            for existing_start, existing_end in spans
+            start < existing_end and end > existing_start for existing_start, existing_end in spans
         )
         if overlaps:
             continue
@@ -486,8 +485,7 @@ async def sec_get_filing(
         {
             "status": "success",
             "summary": (
-                f"Materialized SEC filing and returned focused excerpts for "
-                f"{len(queries)} queries."
+                f"Materialized SEC filing and returned focused excerpts for {len(queries)} queries."
             ),
             "cik": cik,
             "accession_number": accession_number,

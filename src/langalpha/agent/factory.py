@@ -160,9 +160,7 @@ class DeepAgentFactory:
             settings.max_model_calls if is_main else settings.max_researcher_model_calls
         )
         tool_call_limit = settings.max_tool_calls if is_main else settings.max_researcher_tool_calls
-        filesystem_permissions = list(
-            FILESYSTEM_PERMISSIONS if is_main else RESEARCHER_PERMISSIONS
-        )
+        filesystem_permissions = list(FILESYSTEM_PERMISSIONS if is_main else RESEARCHER_PERMISSIONS)
         middleware: list[Any] = [
             FilesystemMiddleware(
                 backend=backend,

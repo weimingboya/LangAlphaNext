@@ -287,9 +287,7 @@ def test_model_retry_skips_deterministic_size_errors() -> None:
 
     assert is_retryable_model_error(ModelError("temporarily rate limited")) is True
     assert (
-        is_retryable_model_error(
-            ModelError("Request too large: Limit 200000, Requested 205984")
-        )
+        is_retryable_model_error(ModelError("Request too large: Limit 200000, Requested 205984"))
         is False
     )
 
