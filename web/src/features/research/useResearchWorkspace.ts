@@ -50,7 +50,7 @@ export interface ResearchWorkspaceState {
   editLatestMessage: (message: string) => Promise<void>;
   filePickerOpen: boolean;
   fileQuery: string;
-  htmlPreview: Asset | null;
+  previewAsset: Asset | null;
   initializeError: string | null;
   interruptRun: (message: string) => Promise<void>;
   loading: boolean;
@@ -68,7 +68,7 @@ export interface ResearchWorkspaceState {
   setContextOpen: (open: boolean) => void;
   setFilePickerOpen: (open: boolean) => void;
   setFileQuery: (query: string) => void;
-  setHtmlPreview: (asset: Asset | null) => void;
+  setPreviewAsset: (asset: Asset | null) => void;
   setThreadDrawerOpen: (open: boolean) => void;
   submitMessage: (message: string, strategy?: "enqueue" | "interrupt") => Promise<void>;
   threadDrawerOpen: boolean;
@@ -97,7 +97,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
   const [assets, setAssets] = useState<Asset[]>([]);
   const [branch, setBranch] = useState<ThreadBranchState>(emptyBranchState);
   const [selectedReference, setSelectedReference] = useState<Asset | null>(null);
-  const [htmlPreview, setHtmlPreview] = useState<Asset | null>(null);
+  const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
   const [contextOpen, setContextOpen] = useState(() => window.innerWidth > 1180);
   const [threadDrawerOpen, setThreadDrawerOpen] = useState(false);
   const [filePickerOpen, setFilePickerOpen] = useState(false);
@@ -363,7 +363,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
       branchRef.current = emptyBranchState();
       setBranch(emptyBranchState());
       setSelectedReference(null);
-      setHtmlPreview(null);
+      setPreviewAsset(null);
       setThreadDrawerOpen(false);
       sourceRef.current?.close();
       sourceRef.current = null;
@@ -398,7 +398,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
       branchRef.current = emptyBranchState();
       setBranch(emptyBranchState());
       setSelectedReference(null);
-      setHtmlPreview(null);
+      setPreviewAsset(null);
       setFilePickerOpen(false);
       dispatchProjection({ type: "reset" });
 
@@ -514,7 +514,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
         branchRef.current = emptyBranchState();
         setBranch(emptyBranchState());
         setSelectedReference(null);
-        setHtmlPreview(null);
+        setPreviewAsset(null);
         setFilePickerOpen(false);
         dispatchProjection({ type: "reset" });
 
@@ -743,7 +743,10 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
 
   const closeDrawers = useCallback(() => {
     setThreadDrawerOpen(false);
-    if (window.innerWidth <= 1180) setContextOpen(false);
+    if (window.innerWidth <= 1180) {
+      setContextOpen(false);
+      setPreviewAsset(null);
+    }
   }, []);
 
   useEffect(() => {
@@ -805,7 +808,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
       editLatestMessage,
       filePickerOpen,
       fileQuery,
-      htmlPreview,
+      previewAsset,
       initializeError,
       interruptRun,
       loading,
@@ -823,7 +826,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
       setContextOpen,
       setFilePickerOpen,
       setFileQuery,
-      setHtmlPreview,
+      setPreviewAsset,
       setThreadDrawerOpen,
       submitMessage,
       threadDrawerOpen,
@@ -848,7 +851,7 @@ export function useResearchWorkspace(client: ApiClient): ResearchWorkspaceState 
       editLatestMessage,
       filePickerOpen,
       fileQuery,
-      htmlPreview,
+      previewAsset,
       initializeError,
       interruptRun,
       loading,

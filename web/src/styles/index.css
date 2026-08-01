@@ -16,6 +16,7 @@
   --sans: Inter, Geist, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --rail-width: 248px;
   --context-width: 308px;
+  --preview-width: clamp(480px, 42vw, 720px);
   --header-height: 64px;
 }
 
@@ -70,6 +71,10 @@ svg {
 
 .app-shell.context-open {
   grid-template-columns: var(--rail-width) minmax(480px, 1fr) var(--context-width);
+}
+
+.app-shell.context-open.preview-open {
+  grid-template-columns: var(--rail-width) minmax(480px, 1fr) var(--preview-width);
 }
 
 .thread-rail {
@@ -1894,6 +1899,244 @@ svg {
   pointer-events: auto;
 }
 
+.file-preview-rail {
+  display: grid;
+  grid-template-rows: var(--header-height) minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.preview-header {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 34px minmax(0, 1fr) 34px 34px;
+  align-items: center;
+  gap: 5px;
+  border-bottom: 1px solid var(--line);
+  padding: 0 14px;
+}
+
+.preview-title {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  padding: 0 5px;
+}
+
+.preview-title strong,
+.preview-title small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-title strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.preview-title small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.preview-body {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: #f7f8f8;
+}
+
+.preview-body.pdf-body,
+.preview-body.html-body {
+  overflow: hidden;
+}
+
+.preview-state {
+  display: grid;
+  min-height: 100%;
+  place-content: center;
+  justify-items: center;
+  padding: 40px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.preview-state .file-icon {
+  width: 46px;
+  height: 46px;
+  margin-bottom: 14px;
+}
+
+.preview-state h3 {
+  margin: 0 0 7px;
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.preview-state p {
+  max-width: 340px;
+  margin: 0 0 18px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.preview-state button {
+  min-height: 36px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: white;
+  color: var(--accent-dark);
+  padding: 0 13px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.preview-error {
+  color: var(--danger);
+}
+
+.document-preview {
+  width: min(100%, 820px);
+  min-height: 100%;
+  margin: 0 auto;
+  background: white;
+  padding: clamp(28px, 5vw, 64px);
+  box-shadow: 0 0 0 1px rgba(31, 52, 45, 0.04);
+}
+
+.document-preview .markdown-content {
+  color: #232927;
+  font-size: 15px;
+  line-height: 1.72;
+}
+
+.document-preview .markdown-content h1 {
+  margin-top: 0;
+  font-size: 31px;
+  letter-spacing: -0.035em;
+}
+
+.plain-text-preview {
+  min-width: min-content;
+  min-height: 100%;
+  margin: 0;
+  background: white;
+  color: #29312f;
+  padding: 28px 32px;
+  tab-size: 2;
+  font: 12px/1.68 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.native-document-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: white;
+}
+
+.media-preview {
+  display: grid;
+  min-height: 100%;
+  place-items: center;
+  padding: 32px;
+}
+
+.media-preview img,
+.media-preview video {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100dvh - var(--header-height) - 64px);
+  border-radius: 5px;
+  box-shadow: 0 8px 32px rgba(26, 38, 34, 0.12);
+}
+
+.media-preview audio {
+  width: min(100%, 480px);
+}
+
+.csv-preview {
+  min-height: 100%;
+  background: white;
+}
+
+.csv-summary {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 14px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.96);
+  padding: 0 16px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.preview-notice,
+.preview-limit {
+  margin: 0;
+  color: #8a5d0f;
+  background: #fff9e9;
+  padding: 9px 16px;
+  font-size: 11px;
+}
+
+.preview-limit {
+  color: var(--muted);
+  background: var(--soft);
+}
+
+.csv-table-wrap {
+  overflow: auto;
+}
+
+.csv-table-wrap table {
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 11px;
+}
+
+.csv-table-wrap th,
+.csv-table-wrap td {
+  max-width: 340px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 8px 11px;
+  overflow: hidden;
+  background: white;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.csv-table-wrap thead th {
+  position: sticky;
+  top: 42px;
+  z-index: 1;
+  background: #f4f7f6;
+  color: #44504c;
+  font-weight: 680;
+}
+
+.csv-table-wrap tr > :first-child {
+  position: sticky;
+  left: 0;
+  color: var(--subtle);
+  background: #f8faf9;
+  text-align: right;
+}
+
+.csv-table-wrap thead tr > :first-child {
+  z-index: 3;
+}
+
 .context-header {
   height: var(--header-height);
   justify-content: space-between;
@@ -2077,7 +2320,8 @@ svg {
 
 @media (max-width: 1180px) {
   .app-shell,
-  .app-shell.context-open {
+  .app-shell.context-open,
+  .app-shell.context-open.preview-open {
     grid-template-columns: var(--rail-width) minmax(0, 1fr);
   }
 
@@ -2095,6 +2339,11 @@ svg {
 
   .context-open .context-rail {
     transform: translateX(0);
+  }
+
+  .preview-open .context-rail {
+    width: min(var(--preview-width), calc(100vw - 40px));
+    box-shadow: -16px 0 48px rgba(20, 32, 28, 0.14);
   }
 
   .drawer-backdrop {
@@ -2129,7 +2378,8 @@ svg {
   }
 
   .app-shell,
-  .app-shell.context-open {
+  .app-shell.context-open,
+  .app-shell.context-open.preview-open {
     display: block;
     min-height: 0;
   }
@@ -2286,6 +2536,19 @@ svg {
 
   .context-rail {
     width: min(330px, calc(100vw - 30px));
+  }
+
+  .preview-open .context-rail {
+    width: 100vw;
+    max-width: none;
+  }
+
+  .app-shell.preview-open .drawer-backdrop {
+    display: none;
+  }
+
+  .document-preview {
+    padding: 26px 20px 52px;
   }
 
   .app-shell.threads-open .drawer-backdrop,

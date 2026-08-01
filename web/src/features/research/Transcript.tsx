@@ -219,49 +219,6 @@ function InterruptCard({
   );
 }
 
-function HtmlArtifact({
-  artifact,
-  onDownload,
-}: {
-  artifact: Asset;
-  onDownload: (asset: Asset) => Promise<void>;
-}) {
-  return (
-    <section className="widget-card html-artifact-card">
-      <div className="widget-heading">
-        <h3>{artifact.filename}</h3>
-        <span>HTML</span>
-      </div>
-      <p>Sandbox-generated interactive artifact</p>
-      <div className="html-artifact-actions">
-        <a
-          href={`/api/assets/${artifact.id}/view`}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Open in new tab
-        </a>
-        <a
-          href="#"
-          onClick={(event) => {
-            event.preventDefault();
-            void onDownload(artifact);
-          }}
-        >
-          Download
-        </a>
-      </div>
-      <iframe
-        className="html-artifact-frame"
-        src={`/api/assets/${artifact.id}/view`}
-        title={`Preview ${artifact.filename}`}
-        referrerPolicy="no-referrer"
-        sandbox="allow-scripts"
-      />
-    </section>
-  );
-}
-
 function LatestUserMessage({
   assets,
   branch,
@@ -402,8 +359,6 @@ function eventWidget(event: AgentEvent): Widget {
 interface TranscriptProps {
   assets: Asset[];
   branch: ThreadBranchState;
-  htmlPreview: Asset | null;
-  onDownload: (asset: Asset) => Promise<void>;
   onEditLatest: (message: string) => Promise<void>;
   onResume: (event: AgentEvent, value: unknown) => Promise<void>;
   onSelectBranch: (checkpointId: string) => Promise<void>;
@@ -413,8 +368,6 @@ interface TranscriptProps {
 export function Transcript({
   assets,
   branch,
-  htmlPreview,
-  onDownload,
   onEditLatest,
   onResume,
   onSelectBranch,
@@ -459,9 +412,9 @@ export function Transcript({
   useLayoutEffect(() => {
     const transcript = transcriptRef.current;
     if (transcript && stickToBottomRef.current) transcript.scrollTop = transcript.scrollHeight;
-  }, [htmlPreview, projection.events]);
+  }, [projection.events]);
 
-  if (!projection.events.length && !htmlPreview) {
+  if (!projection.events.length) {
     return (
       <div className="transcript" ref={transcriptRef} aria-live="polite">
         <div className="empty-state">
@@ -565,7 +518,6 @@ export function Transcript({
         .map((event) => (
           <WidgetCard key={event.id} widget={eventWidget(event)} />
         ))}
-      {htmlPreview ? <HtmlArtifact artifact={htmlPreview} onDownload={onDownload} /> : null}
       {unresolved.length ? (
         <InterruptCard event={unresolved.at(-1)!} onResume={onResume} />
       ) : null}

@@ -10,8 +10,7 @@ describe("ContextPanel", () => {
         assets={[]}
         citations={[]}
         onClose={() => undefined}
-        onDownload={() => undefined}
-        onOpenHtml={() => undefined}
+        onOpenFile={() => undefined}
         onReference={() => undefined}
         todos={[
           { content: "Collect filings", status: "completed" },
@@ -34,8 +33,7 @@ describe("ContextPanel", () => {
         assets={[]}
         citations={[]}
         onClose={() => undefined}
-        onDownload={() => undefined}
-        onOpenHtml={() => undefined}
+        onOpenFile={() => undefined}
         onReference={() => undefined}
         todos={[]}
       />,

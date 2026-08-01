@@ -1,4 +1,5 @@
 import asyncio
+import mimetypes
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
@@ -27,6 +28,26 @@ _HTML_ASSET_CSP = (
     "base-uri 'none'; "
     "form-action 'none'"
 )
+_INLINE_APPLICATION_TYPES = {
+    "application/json",
+    "application/pdf",
+    "application/xhtml+xml",
+    "application/xml",
+}
+_UNSAFE_INLINE_TYPES = {"image/svg+xml"}
+
+
+def _inline_media_type(filename: str, declared_media_type: str) -> str | None:
+    declared = declared_media_type.partition(";")[0].strip().lower()
+    guessed = (mimetypes.guess_type(filename)[0] or "").lower()
+    media_type = guessed if declared in {"", "application/octet-stream"} else declared
+    if media_type in _UNSAFE_INLINE_TYPES:
+        return None
+    if media_type.startswith(("text/", "image/", "audio/", "video/")):
+        return media_type
+    if media_type in _INLINE_APPLICATION_TYPES:
+        return media_type
+    return None
 
 
 @router.post(
@@ -122,7 +143,7 @@ async def asset_download_url(
 
 
 @router.get("/assets/{asset_id}/view")
-async def view_html_asset(
+async def view_asset(
     asset_id: str,
     user: UserDep,
     services: ServicesDep,
@@ -135,20 +156,22 @@ async def view_html_asset(
         )
     except Exception as exc:
         raise asset_http_error(exc) from exc
-    media_type = asset.media_type.partition(";")[0].strip().lower()
-    if media_type not in {"text/html", "application/xhtml+xml"}:
+    media_type = _inline_media_type(asset.filename, asset.media_type)
+    if media_type is None:
         raise HTTPException(
             status_code=415,
-            detail="inline preview supports HTML assets only",
+            detail="this file format does not support inline preview",
         )
+    headers = {
+        "Content-Disposition": f'inline; filename="{safe_filename(asset.filename)}"',
+        "X-Content-Type-Options": "nosniff",
+    }
+    if media_type in {"text/html", "application/xhtml+xml"}:
+        headers["Content-Security-Policy"] = _HTML_ASSET_CSP
     return Response(
         content=content,
         media_type=media_type,
-        headers={
-            "Content-Security-Policy": _HTML_ASSET_CSP,
-            "Content-Disposition": f'inline; filename="{safe_filename(asset.filename)}"',
-            "X-Content-Type-Options": "nosniff",
-        },
+        headers=headers,
     )
 
 

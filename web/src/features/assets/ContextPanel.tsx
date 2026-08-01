@@ -5,8 +5,7 @@ interface ContextPanelProps {
   assets: Asset[];
   citations: Citation[];
   onClose: () => void;
-  onDownload: (asset: Asset) => void;
-  onOpenHtml: (asset: Asset) => void;
+  onOpenFile: (asset: Asset) => void;
   onReference: () => void;
   todos: TodoItem[];
 }
@@ -25,16 +24,11 @@ function formatArtifactDate(asset: Asset): string {
   })}`;
 }
 
-function isHtml(asset: Asset): boolean {
-  return asset.media_type.split(";")[0].trim().toLowerCase() === "text/html";
-}
-
 export function ContextPanel({
   assets,
   citations,
   onClose,
-  onDownload,
-  onOpenHtml,
+  onOpenFile,
   onReference,
   todos,
 }: ContextPanelProps) {
@@ -113,12 +107,11 @@ export function ContextPanel({
             [...assets].reverse().map((asset) => (
               <a
                 className="context-file"
-                href={isHtml(asset) ? `/api/assets/${asset.id}/view` : "#"}
+                href={`/api/assets/${asset.id}/view`}
                 key={asset.id}
                 onClick={(event) => {
                   event.preventDefault();
-                  if (isHtml(asset)) onOpenHtml(asset);
-                  else onDownload(asset);
+                  onOpenFile(asset);
                 }}
               >
                 <FileIcon />

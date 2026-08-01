@@ -67,8 +67,6 @@ describe("Transcript activity", () => {
             },
           ],
         }}
-        htmlPreview={null}
-        onDownload={async () => undefined}
         onEditLatest={async () => undefined}
         onResume={async () => undefined}
         onSelectBranch={async () => undefined}
@@ -117,8 +115,6 @@ describe("Transcript activity", () => {
       <Transcript
         assets={[]}
         branch={branch}
-        htmlPreview={null}
-        onDownload={async () => undefined}
         onEditLatest={async () => undefined}
         onResume={async () => undefined}
         onSelectBranch={async () => undefined}
@@ -173,8 +169,6 @@ describe("Transcript activity", () => {
       <Transcript
         assets={[]}
         branch={branch}
-        htmlPreview={null}
-        onDownload={async () => undefined}
         onEditLatest={async () => undefined}
         onResume={async () => undefined}
         onSelectBranch={async () => undefined}
@@ -225,8 +219,6 @@ describe("Transcript activity", () => {
       <Transcript
         assets={[]}
         branch={branch}
-        htmlPreview={null}
-        onDownload={async () => undefined}
         onEditLatest={async () => undefined}
         onResume={async () => undefined}
         onSelectBranch={async () => undefined}

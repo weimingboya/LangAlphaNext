@@ -767,3 +767,50 @@ def test_upload_contract_has_no_custom_steering_routes() -> None:
     assert completed.json()["status"] == "ready"
 
     assert all("guidance" not in path for path in client.app.openapi()["paths"])
+
+
+def test_asset_view_serves_supported_formats_inline_and_rejects_unknown_binary() -> None:
+    client, _, assets = _client()
+    thread = _thread(client)
+    project_id = thread["metadata"]["project_id"]
+    markdown = assets.ingest_input(
+        owner_id="00000000-0000-0000-0000-000000000001",
+        project_id=project_id,
+        filename="report.md",
+        media_type="application/octet-stream",
+        content=b"# Report\n\nPreview me.",
+    )
+    html = assets.ingest_input(
+        owner_id="00000000-0000-0000-0000-000000000001",
+        project_id=project_id,
+        filename="chart.html",
+        media_type="text/html",
+        content=b"<h1>Chart</h1>",
+    )
+    archive = assets.ingest_input(
+        owner_id="00000000-0000-0000-0000-000000000001",
+        project_id=project_id,
+        filename="bundle.zip",
+        media_type="application/zip",
+        content=b"PK",
+    )
+
+    markdown_response = client.get(
+        f"/api/assets/{markdown.id}/view",
+        headers=_headers(),
+    )
+    assert markdown_response.status_code == 200
+    assert markdown_response.text.startswith("# Report")
+    assert markdown_response.headers["content-type"].startswith("text/markdown")
+    assert markdown_response.headers["content-disposition"] == 'inline; filename="report.md"'
+    assert markdown_response.headers["x-content-type-options"] == "nosniff"
+
+    html_response = client.get(f"/api/assets/{html.id}/view", headers=_headers())
+    assert html_response.status_code == 200
+    assert html_response.headers["content-security-policy"].startswith("sandbox")
+
+    unsupported_response = client.get(
+        f"/api/assets/{archive.id}/view",
+        headers=_headers(),
+    )
+    assert unsupported_response.status_code == 415

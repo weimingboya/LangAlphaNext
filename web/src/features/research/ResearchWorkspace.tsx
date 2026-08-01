@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { lazy, Suspense, useMemo } from "react";
 
 import { projectTodos } from "../../domain/agent-events";
 import type { ApiClient } from "../../shared/api/api-client";
@@ -9,6 +9,8 @@ import { Composer } from "./Composer";
 import { ConversationHeader } from "./ConversationHeader";
 import { collectCitations, Transcript } from "./Transcript";
 import { useResearchWorkspace } from "./useResearchWorkspace";
+
+const FilePreviewPanel = lazy(() => import("../assets/FilePreviewPanel"));
 
 interface ResearchWorkspaceProps {
   client: ApiClient;
@@ -28,6 +30,7 @@ export function ResearchWorkspace({ client, onSignOut }: ResearchWorkspaceProps)
   const className = [
     "app-shell",
     workspace.contextOpen ? "context-open" : "",
+    workspace.previewAsset ? "preview-open" : "",
     workspace.threadDrawerOpen ? "threads-open" : "",
   ]
     .filter(Boolean)
@@ -92,10 +95,12 @@ export function ResearchWorkspace({ client, onSignOut }: ResearchWorkspaceProps)
           contextOpen={workspace.contextOpen}
           onOpenThreads={() => {
             workspace.setContextOpen(false);
+            workspace.setPreviewAsset(null);
             workspace.setThreadDrawerOpen(true);
           }}
           onToggleContext={() => {
             workspace.setThreadDrawerOpen(false);
+            if (workspace.contextOpen) workspace.setPreviewAsset(null);
             workspace.setContextOpen(!workspace.contextOpen);
           }}
           title={workspace.activeThread?.title || "New research"}
@@ -122,8 +127,6 @@ export function ResearchWorkspace({ client, onSignOut }: ResearchWorkspaceProps)
           <Transcript
             assets={workspace.assets}
             branch={workspace.branch}
-            htmlPreview={workspace.htmlPreview}
-            onDownload={workspace.downloadAsset}
             onEditLatest={async (message) => {
               try {
                 await workspace.editLatestMessage(message);
@@ -162,18 +165,37 @@ export function ResearchWorkspace({ client, onSignOut }: ResearchWorkspaceProps)
         />
       </section>
 
-      <ContextPanel
-        assets={workspace.assets}
-        citations={citations}
-        onClose={() => workspace.setContextOpen(false)}
-        onDownload={(asset) => void workspace.downloadAsset(asset).catch(report)}
-        onOpenHtml={(asset) => {
-          workspace.setHtmlPreview(asset);
-          workspace.setContextOpen(false);
-        }}
-        onReference={() => workspace.openFilePicker()}
-        todos={todos}
-      />
+      {workspace.previewAsset ? (
+        <Suspense
+          fallback={
+            <aside className="context-rail file-preview-rail" aria-label="Opening file preview">
+              <div className="preview-state">Opening preview…</div>
+            </aside>
+          }
+        >
+          <FilePreviewPanel
+            asset={workspace.previewAsset}
+            onBack={() => workspace.setPreviewAsset(null)}
+            onClose={() => {
+              workspace.setPreviewAsset(null);
+              workspace.setContextOpen(false);
+            }}
+            onDownload={workspace.downloadAsset}
+          />
+        </Suspense>
+      ) : (
+        <ContextPanel
+          assets={workspace.assets}
+          citations={citations}
+          onClose={() => workspace.setContextOpen(false)}
+          onOpenFile={(asset) => {
+            workspace.setPreviewAsset(asset);
+            workspace.setContextOpen(true);
+          }}
+          onReference={() => workspace.openFilePicker()}
+          todos={todos}
+        />
+      )}
 
       <button
         className="drawer-backdrop"
