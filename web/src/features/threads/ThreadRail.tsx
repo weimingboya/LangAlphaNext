@@ -12,6 +12,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import type { Project, Thread } from "../../domain/types";
+import { BrandMark } from "../../shared/ui/BrandMark";
 
 interface ThreadRailProps {
   activeProject: Project | null;
@@ -193,7 +194,10 @@ export function ThreadRail({
   return (
     <aside className="thread-rail" aria-label="Research navigation">
       <div className="rail-brand-row">
-        <h1>LangAlpha</h1>
+        <div className="rail-brand-identity">
+          <BrandMark className="rail-brand-mark" />
+          <h1>LangAlpha</h1>
+        </div>
         <button
           className="icon-button mobile-only"
           type="button"

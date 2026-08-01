@@ -89,6 +89,15 @@ def test_workspace_adapter_maps_virtual_paths_to_daytona_work_dir() -> None:
     assert downloaded[1].error == "invalid_path"
 
 
+def test_context_backend_keeps_internal_tool_results_out_of_user_artifacts() -> None:
+    module.get_context_daytona_backend.cache_clear()
+    try:
+        backend = module.get_context_daytona_backend()
+        assert backend.artifacts_root == "/workspace/.langalpha/tool-results"
+    finally:
+        module.get_context_daytona_backend.cache_clear()
+
+
 def test_workspace_adapter_maps_deep_agents_file_api_before_command_encoding() -> None:
     physical_root = "/home/daytona/langalpha-workspace"
     calls: list[tuple[object, ...]] = []
@@ -102,7 +111,13 @@ def test_workspace_adapter_maps_deep_agents_file_api_before_command_encoding() -
 
         def read(self, path: str, offset: int, limit: int):
             calls.append(("read", path, offset, limit))
-            return ReadResult(file_data={"content": "value\n1", "encoding": "utf-8"})
+            return ReadResult(
+                file_data={"content": "value\n1", "encoding": "utf-8"},
+                total_lines=10,
+                start_line=1,
+                end_line=2,
+                next_offset=2,
+            )
 
         def write(self, path: str, content: str):
             calls.append(("write", path, content))
@@ -150,7 +165,12 @@ def test_workspace_adapter_maps_deep_agents_file_api_before_command_encoding() -
     )
 
     assert backend.ls("/workspace").entries == [{"path": "/workspace/uploads", "is_dir": True}]
-    assert backend.read("/workspace/uploads/data.csv").error is None
+    read_result = backend.read("/workspace/uploads/data.csv")
+    assert read_result.error is None
+    assert read_result.total_lines == 10
+    assert read_result.start_line == 1
+    assert read_result.end_line == 2
+    assert read_result.next_offset == 2
     assert backend.write("/workspace/artifacts/report.md", "report").path == (
         "/workspace/artifacts/report.md"
     )

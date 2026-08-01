@@ -30,6 +30,7 @@ import type {
   ThreadBranchState,
   Widget,
 } from "../../domain/types";
+import { BrandMark } from "../../shared/ui/BrandMark";
 import { WidgetCard } from "./WidgetCard";
 
 const MarkdownMessage = lazy(() => import("./MarkdownMessage"));
@@ -84,6 +85,7 @@ function Activity({
 }) {
   const items = projectActivity(events);
   const latest = items.at(-1);
+  const visibleItems = items.slice(-16);
   const visuallyComplete = projection.status.label === "Analysis complete";
   const title =
     projection.status.mode === "active"
@@ -115,8 +117,15 @@ function Activity({
       </summary>
       {items.length ? (
         <ol className="activity-events">
-          {items.slice(-16).map((item) => (
-            <ActivityRow item={item} key={item.id} settled={visuallyComplete} />
+          {visibleItems.map((item, index) => (
+            <ActivityRow
+              item={item}
+              key={item.id}
+              settled={
+                visuallyComplete ||
+                (item.kind === "reasoning" && index < visibleItems.length - 1)
+              }
+            />
           ))}
         </ol>
       ) : (
@@ -456,9 +465,7 @@ export function Transcript({
     return (
       <div className="transcript" ref={transcriptRef} aria-live="polite">
         <div className="empty-state">
-          <div className="empty-mark" aria-hidden="true">
-            L
-          </div>
+          <BrandMark className="empty-brand-mark" />
           <h2>What would you like to research?</h2>
           <p>Ask a question, attach a file, or type @ to reference one already in this workspace.</p>
         </div>

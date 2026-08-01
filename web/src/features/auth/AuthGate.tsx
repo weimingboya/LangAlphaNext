@@ -1,5 +1,7 @@
 import { useState, type FormEvent } from "react";
 
+import { BrandMark } from "../../shared/ui/BrandMark";
+
 interface AuthGateProps {
   initialError?: string | null;
   onSignIn: (email: string, password: string) => Promise<void>;
@@ -26,9 +28,7 @@ export function AuthGate({ initialError, onSignIn }: AuthGateProps) {
   return (
     <section className="auth-gate">
       <form className="auth-card" onSubmit={submit}>
-        <div className="empty-mark" aria-hidden="true">
-          L
-        </div>
+        <BrandMark className="empty-brand-mark" />
         <h1>Sign in to LangAlpha</h1>
         <p>Your research threads and files stay private to your account.</p>
         <label>

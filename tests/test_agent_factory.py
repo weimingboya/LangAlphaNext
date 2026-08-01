@@ -8,6 +8,8 @@ from pathlib import Path
 import langalpha.agent.factory as factory_module
 from langalpha.agent.factory import (
     FILESYSTEM_PERMISSIONS,
+    FILESYSTEM_TOOL_TOKEN_LIMIT,
+    READ_FILE_TOOL_DESCRIPTION,
     RESEARCHER_PERMISSIONS,
     RESEARCHER_SKILLS,
     DeepAgentFactory,
@@ -59,6 +61,7 @@ def test_factory_is_single_harness_entry_and_exposes_expected_tools(
     assert "task" not in names
     assert "submit_plan" not in names
     assert "market_get_snapshots" not in names
+    assert tool_node._tools_by_name["read_file"].description == READ_FILE_TOOL_DESCRIPTION
 
     researcher_tools = graphs.research_graph.get_graph().nodes["tools"].data
     researcher_names = set(researcher_tools._tools_by_name)
@@ -157,6 +160,7 @@ def test_factory_uses_tpm_aware_model_and_tool_retry_policies(monkeypatch) -> No
     assert model_retry_kwargs == [
         {
             "max_retries": 3,
+            "retry_on": factory_module.is_retryable_model_error,
             "initial_delay": 10,
             "max_delay": 60,
             "on_failure": "error",
@@ -164,6 +168,34 @@ def test_factory_uses_tpm_aware_model_and_tool_retry_policies(monkeypatch) -> No
     ]
     assert len(tool_retry_kwargs) == 1
     assert tool_retry_kwargs[0]["retry_on"] is factory_module.is_retryable_tool_error
+
+
+def test_factory_bounds_filesystem_results_with_native_middleware(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    get_settings.cache_clear()
+    captured: list[dict[str, object]] = []
+    real_middleware = factory_module.FilesystemMiddleware
+
+    def capture_filesystem_middleware(**kwargs):
+        captured.append(kwargs)
+        return real_middleware(**kwargs)
+
+    monkeypatch.setattr(
+        factory_module,
+        "FilesystemMiddleware",
+        capture_filesystem_middleware,
+    )
+    try:
+        DeepAgentFactory().create("main")
+    finally:
+        get_settings.cache_clear()
+
+    assert len(captured) == 1
+    assert captured[0]["tool_token_limit_before_evict"] == FILESYSTEM_TOOL_TOKEN_LIMIT
+    assert captured[0]["custom_tool_descriptions"] == {
+        "read_file": READ_FILE_TOOL_DESCRIPTION
+    }
+    assert captured[0]["_permissions"] == list(FILESYSTEM_PERMISSIONS)
 
 
 def test_filesystem_permissions_protect_read_only_product_routes() -> None:
@@ -209,6 +241,7 @@ def test_filesystem_permissions_protect_read_only_product_routes() -> None:
     assert set(ResearchResult.model_fields) == {
         "summary",
         "evidence",
+        "datasets",
         "limitations",
     }
 

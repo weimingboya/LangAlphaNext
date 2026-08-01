@@ -2,6 +2,7 @@ import { useMemo } from "react";
 
 import { projectTodos } from "../../domain/agent-events";
 import type { ApiClient } from "../../shared/api/api-client";
+import { BrandMark } from "../../shared/ui/BrandMark";
 import { ContextPanel } from "../assets/ContextPanel";
 import { ThreadRail } from "../threads/ThreadRail";
 import { Composer } from "./Composer";
@@ -113,9 +114,7 @@ export function ResearchWorkspace({ client, onSignOut }: ResearchWorkspaceProps)
         ) : workspace.loading ? (
           <div className="transcript">
             <div className="empty-state">
-              <div className="empty-mark loading-mark" aria-hidden="true">
-                L
-              </div>
+              <BrandMark className="empty-brand-mark loading-mark" />
               <h2>Opening your workspace…</h2>
             </div>
           </div>

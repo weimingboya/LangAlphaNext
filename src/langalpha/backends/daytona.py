@@ -48,6 +48,7 @@ _BOUND_EVENTS: set[tuple[str, str]] = set()
 _HYDRATED_INPUTS: set[tuple[str, str, tuple[str, ...]]] = set()
 _RESOURCE_ROOT = Path(__file__).resolve().parents[1] / "resources"
 _ARTIFACTS_ROOT = "/workspace/artifacts"
+_INTERNAL_TOOL_RESULTS_ROOT = "/workspace/.langalpha/tool-results"
 _VIRTUAL_WORKSPACE = "/workspace"
 _COMMAND_WORKSPACE_PATTERN = re.compile(r"(?<![A-Za-z0-9_.-])/workspace(?=$|[/\s'\";:),\]}])")
 _MANIFEST_COMMAND = """python - <<'PY'
@@ -357,6 +358,10 @@ class WorkspaceMappedDaytonaSandbox(BaseSandbox):
         return ReadResult(
             error=self._virtualize_text(result.error),
             file_data=result.file_data,
+            total_lines=result.total_lines,
+            start_line=result.start_line,
+            end_line=result.end_line,
+            next_offset=result.next_offset,
         )
 
     async def aread(
@@ -512,7 +517,7 @@ def get_context_daytona_backend() -> BackendProtocol:
             "/memories/user/": StoreBackend(namespace=_user_memory_namespace),
             "/memories/project/": StoreBackend(namespace=_project_memory_namespace),
         },
-        artifacts_root="/workspace/artifacts",
+        artifacts_root=_INTERNAL_TOOL_RESULTS_ROOT,
     )
 
 

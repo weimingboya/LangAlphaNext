@@ -9,7 +9,7 @@ from deepagents import (
     create_deep_agent,
     register_harness_profile,
 )
-from deepagents.middleware.filesystem import FilesystemPermission
+from deepagents.middleware.filesystem import FilesystemMiddleware, FilesystemPermission
 from langchain.agents.middleware import (
     ModelCallLimitMiddleware,
     ModelRetryMiddleware,
@@ -32,7 +32,7 @@ from langalpha.agent.responses import ResearchResult
 from langalpha.agent.state import LangAlphaAgentState
 from langalpha.agent.tools import HOST_TOOLS
 from langalpha.backends import get_context_daytona_backend, get_researcher_backend
-from langalpha.capabilities.errors import is_retryable_tool_error
+from langalpha.capabilities.errors import is_retryable_model_error, is_retryable_tool_error
 from langalpha.capabilities.finance import FINANCE_TOOLS, RESEARCH_FINANCE_TOOLS
 from langalpha.capabilities.macro import MACRO_TOOLS
 from langalpha.capabilities.openai_web import (
@@ -68,6 +68,17 @@ FILESYSTEM_PERMISSIONS = (
         paths=["/skills/**", "/memory/**"],
         mode="deny",
     ),
+)
+
+FILESYSTEM_TOOL_TOKEN_LIMIT = 4_000
+
+READ_FILE_TOOL_DESCRIPTION = (
+    "Read a small, line-numbered slice of a text file or a supported media file.\n"
+    "Use offset and limit to page through ordinary text. Do not inspect structured working data\n"
+    "under /workspace/.langalpha with this tool; use execute with Python to filter,\n"
+    "aggregate, and print only the compact rows or statistics needed for reasoning. Text\n"
+    "output is capped and reports a safe continuation offset when another page is available.\n"
+    "Always read an ordinary file before editing it."
 )
 
 RESEARCHER_PERMISSIONS = (
@@ -149,7 +160,17 @@ class DeepAgentFactory:
             settings.max_model_calls if is_main else settings.max_researcher_model_calls
         )
         tool_call_limit = settings.max_tool_calls if is_main else settings.max_researcher_tool_calls
-        middleware: list[Any] = []
+        filesystem_permissions = list(
+            FILESYSTEM_PERMISSIONS if is_main else RESEARCHER_PERMISSIONS
+        )
+        middleware: list[Any] = [
+            FilesystemMiddleware(
+                backend=backend,
+                custom_tool_descriptions={"read_file": READ_FILE_TOOL_DESCRIPTION},
+                tool_token_limit_before_evict=FILESYSTEM_TOOL_TOKEN_LIMIT,
+                _permissions=filesystem_permissions,
+            )
+        ]
         if is_main:
             middleware.append(TodoListMiddleware(system_prompt=""))
         middleware.extend(
@@ -167,6 +188,7 @@ class DeepAgentFactory:
                 ),
                 ModelRetryMiddleware(
                     max_retries=3,
+                    retry_on=is_retryable_model_error,
                     initial_delay=10,
                     max_delay=60,
                     on_failure="error",
@@ -227,7 +249,7 @@ class DeepAgentFactory:
             middleware=middleware,
             skills=["/skills/"] if is_main else RESEARCHER_SKILLS,
             memory=MAIN_MEMORY_FILES if is_main else None,
-            permissions=(list(FILESYSTEM_PERMISSIONS) if is_main else list(RESEARCHER_PERMISSIONS)),
+            permissions=filesystem_permissions,
             backend=backend,
             response_format=_RESPONSE_FORMATS[profile],
             state_schema=LangAlphaAgentState,

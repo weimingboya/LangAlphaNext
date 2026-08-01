@@ -96,6 +96,18 @@ svg {
   padding: 0 8px;
 }
 
+.rail-brand-identity {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.rail-brand-mark {
+  width: 25px;
+  height: 25px;
+  object-fit: contain;
+}
+
 .thread-rail h1 {
   margin: 0;
   color: var(--accent);
@@ -727,6 +739,13 @@ svg {
   background: var(--accent);
   color: white;
   font: 22px/1 var(--serif);
+}
+
+.empty-brand-mark {
+  width: 48px;
+  height: 48px;
+  margin-bottom: 18px;
+  object-fit: contain;
 }
 
 .empty-state h2 {

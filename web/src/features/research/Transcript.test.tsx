@@ -134,6 +134,59 @@ describe("Transcript activity", () => {
     expect(html).not.toContain("…");
   });
 
+  test("settles a running analysis when the next tool starts", () => {
+    const projection: AgentProjection = {
+      activeRunId: "run-1",
+      status: { label: "Analysis running", mode: "active" },
+      events: [
+        {
+          id: "activity-reasoning",
+          thread_id: "thread-1",
+          run_id: "run-1",
+          type: "activity.updated",
+          payload: {
+            id: "reasoning:run-1:reasoning-1",
+            kind: "reasoning",
+            title: "Analysis",
+            detail: "Choose the next research tool",
+            status: "running",
+          },
+          created_at: "2026-01-01T00:00:00Z",
+        },
+        {
+          id: "activity-tool",
+          thread_id: "thread-1",
+          run_id: "run-1",
+          type: "activity.updated",
+          payload: {
+            id: "tool:run-1:tool-1",
+            kind: "tool",
+            title: "Search the web",
+            status: "running",
+          },
+          created_at: "2026-01-01T00:00:01Z",
+        },
+      ],
+    };
+
+    const html = renderToStaticMarkup(
+      <Transcript
+        assets={[]}
+        branch={branch}
+        htmlPreview={null}
+        onDownload={async () => undefined}
+        onEditLatest={async () => undefined}
+        onResume={async () => undefined}
+        onSelectBranch={async () => undefined}
+        projection={projection}
+      />,
+    );
+
+    expect(html).toContain('class="activity-event complete reasoning"');
+    expect(html).toContain('class="activity-event running tool"');
+    expect(html).not.toContain('class="activity-event running reasoning"');
+  });
+
   test("settles a running analysis visually when the final response is visible", () => {
     const projection: AgentProjection = {
       activeRunId: "run-1",

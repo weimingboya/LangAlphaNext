@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import UTC, date, datetime
+from hashlib import sha256
 from html.parser import HTMLParser
 from typing import Any
 
@@ -13,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from langalpha.agent.context import RunContext
 from langalpha.capabilities.errors import raise_for_provider_status
 from langalpha.capabilities.gateway import gateway
+from langalpha.capabilities.materialization import dataset_path, materialize_text
 from langalpha.config import get_settings
 
 _CIK = re.compile(r"^\d{1,10}$")
@@ -37,7 +39,7 @@ class FilingsInput(PublicRuntimeInput):
     forms: list[str] | None = Field(default=None, max_length=20)
     start_date: date | None = None
     end_date: date | None = None
-    limit: int = Field(default=40, ge=1, le=200)
+    limit: int = Field(default=20, ge=1, le=50)
 
     @field_validator("cik")
     @classmethod
@@ -56,8 +58,21 @@ class FilingDocumentInput(PublicRuntimeInput):
     primary_document: str = Field(
         description="Exact primaryDocument returned by sec_list_filings; never infer it.",
     )
-    query: str | None = Field(default=None, max_length=300)
-    max_chars: int = Field(default=30_000, ge=2_000, le=100_000)
+    queries: list[str] = Field(
+        min_length=1,
+        max_length=6,
+        description="Focused phrases or section names to retrieve from the filing.",
+    )
+    snippet_chars: int = Field(default=2_400, ge=500, le=4_000)
+    max_snippets_per_query: int = Field(default=1, ge=1, le=2)
+
+    @field_validator("queries")
+    @classmethod
+    def normalize_queries(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values]
+        if any(not value or len(value) > 300 for value in normalized):
+            raise ValueError("each filing query must contain 1 to 300 characters")
+        return list(dict.fromkeys(normalized))
 
     @field_validator("cik")
     @classmethod
@@ -181,6 +196,127 @@ def _normalized_financial_value(value: Any, unit: str) -> dict[str, Any] | None:
     }
 
 
+def _filing_dataset_content(
+    text: str,
+    *,
+    cik: str,
+    accession_number: str,
+    primary_document: str,
+    source: str,
+) -> str:
+    return "\n".join(
+        (
+            f"Source: {source}",
+            f"CIK: {cik}",
+            f"Accession: {accession_number}",
+            f"Primary document: {primary_document}",
+            "",
+            text,
+        )
+    )
+
+
+def _all_occurrences(text: str, needle: str, *, limit: int = 100) -> list[int]:
+    positions: list[int] = []
+    start = 0
+    while len(positions) < limit:
+        index = text.find(needle, start)
+        if index < 0:
+            break
+        positions.append(index)
+        start = index + max(1, len(needle))
+    return positions
+
+
+def _query_snippets(
+    text: str,
+    query: str,
+    *,
+    snippet_chars: int,
+    max_snippets: int,
+) -> dict[str, Any]:
+    folded_text = text.casefold()
+    folded_query = query.casefold()
+    exact_positions = _all_occurrences(folded_text, folded_query)
+    terms = tuple(dict.fromkeys(_search_terms(query)))
+    matched_terms = [term for term in terms if term in folded_text]
+
+    if exact_positions:
+        candidates = [(len(terms) + 1, position) for position in exact_positions]
+        match_type = "exact"
+    else:
+        anchors: set[int] = set()
+        for term in matched_terms:
+            anchors.update(_all_occurrences(folded_text, term, limit=30))
+        candidates = []
+        for position in anchors:
+            start = max(0, position - snippet_chars // 3)
+            window = folded_text[start : start + snippet_chars]
+            score = sum(term in window for term in terms)
+            candidates.append((score, position))
+        candidates.sort(key=lambda item: (-item[0], item[1]))
+        match_type = (
+            "all_terms"
+            if terms and len(matched_terms) == len(terms)
+            else "partial"
+            if matched_terms
+            else "none"
+        )
+
+    snippets: list[dict[str, Any]] = []
+    spans: list[tuple[int, int]] = []
+    for _score, position in candidates:
+        start = max(0, position - snippet_chars // 3)
+        end = min(len(text), start + snippet_chars)
+        start = max(0, end - snippet_chars)
+        overlaps = any(
+            start < existing_end and end > existing_start
+            for existing_start, existing_end in spans
+        )
+        if overlaps:
+            continue
+        snippets.append(
+            {
+                "start_char": start,
+                "end_char": end,
+                "text": text[start:end],
+            }
+        )
+        spans.append((start, end))
+        if len(snippets) >= max_snippets:
+            break
+
+    return {
+        "query": query,
+        "match_type": match_type,
+        "matched_terms": matched_terms,
+        "snippets": snippets,
+    }
+
+
+def _facts_jsonl(
+    records: list[dict[str, Any]],
+    *,
+    cik: str,
+    source: str,
+    retrieved_at: str,
+) -> str:
+    lines = [
+        json.dumps(
+            {
+                "cik": cik,
+                "source": source,
+                "retrieved_at": retrieved_at,
+                **record,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        for record in records
+    ]
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
 @tool(args_schema=ResolveCompanyInput)
 async def sec_resolve_company(
     query: str,
@@ -243,7 +379,7 @@ async def sec_list_filings(
     forms: list[str] | None = None,
     start_date: date | None = None,
     end_date: date | None = None,
-    limit: int = 40,
+    limit: int = 20,
 ) -> str:
     """List recent SEC filings with accession and primary-document identifiers."""
     if start_date and end_date and start_date > end_date:
@@ -299,11 +435,12 @@ async def sec_get_filing(
     cik: str,
     accession_number: str,
     primary_document: str,
+    queries: list[str],
     runtime: ToolRuntime[RunContext, object],
-    query: str | None = None,
-    max_chars: int = 30_000,
+    snippet_chars: int = 2_400,
+    max_snippets_per_query: int = 1,
 ) -> str:
-    """Retrieve a filing using exact identifiers copied from sec_list_filings."""
+    """Materialize a filing and return only focused excerpts plus its dataset path."""
     gateway.admit_runtime("sec.get_filing", runtime)
     source = (
         "https://www.sec.gov/Archives/edgar/data/"
@@ -312,27 +449,59 @@ async def sec_get_filing(
     async with _client() as client:
         response = await _get(client, source)
     full_text = _html_to_text(response.text)
-    text = full_text
-    if query:
-        match = re.search(re.escape(query), text, flags=re.IGNORECASE)
-        if match:
-            start = max(0, match.start() - max_chars // 3)
-            text = text[start : start + max_chars]
-        else:
-            text = text[:max_chars]
-    else:
-        text = text[:max_chars]
+    retrieved_at = datetime.now(UTC).isoformat()
+    path = dataset_path(
+        "sec",
+        cik,
+        accession_number.replace("-", ""),
+        f"{primary_document}.txt",
+    )
+    dataset = await materialize_text(
+        path,
+        _filing_dataset_content(
+            full_text,
+            cik=cik,
+            accession_number=accession_number,
+            primary_document=primary_document,
+            source=source,
+        ),
+        format="text",
+    )
+    dataset.update(
+        {
+            "content_chars": len(full_text),
+            "line_count": full_text.count("\n") + bool(full_text),
+        }
+    )
+    query_results = [
+        _query_snippets(
+            full_text,
+            query,
+            snippet_chars=snippet_chars,
+            max_snippets=max_snippets_per_query,
+        )
+        for query in queries
+    ]
     return json.dumps(
         {
+            "status": "success",
+            "summary": (
+                f"Materialized SEC filing and returned focused excerpts for "
+                f"{len(queries)} queries."
+            ),
             "cik": cik,
             "accession_number": accession_number,
             "primary_document": primary_document,
-            "query": query,
-            "text": text,
-            "truncated": len(full_text) > len(text),
+            "dataset": dataset,
+            "query_results": query_results,
+            "next_step": (
+                "Use the excerpts first. If more detail is required, search/read the "
+                "text dataset selectively or process it with Python; do not load the "
+                "entire filing into model context."
+            ),
             "provider": "U.S. Securities and Exchange Commission",
             "source": source,
-            "retrieved_at": datetime.now(UTC).isoformat(),
+            "retrieved_at": retrieved_at,
         },
         ensure_ascii=False,
     )
@@ -348,7 +517,7 @@ async def sec_get_company_facts(
     end_date: date | None = None,
     limit_per_concept: int = 20,
 ) -> str:
-    """Get bounded SEC XBRL facts matching the requested concept tags exactly."""
+    """Materialize bounded SEC XBRL facts and return a compact dataset summary."""
     if start_date and end_date and start_date > end_date:
         raise ValueError("start_date must not be after end_date")
     gateway.admit_runtime("sec.company_facts", runtime)
@@ -397,7 +566,83 @@ async def sec_get_company_facts(
                     concept_rows.append(row)
             concept_rows.sort(key=lambda row: str(row.get("filed", "")), reverse=True)
             records.extend(concept_rows[:limit_per_concept])
-    return _envelope(records, source=source)
+    retrieved_at = datetime.now(UTC).isoformat()
+    request_key = json.dumps(
+        {
+            "cik": cik,
+            "concepts": sorted(requested),
+            "forms": sorted(normalized_forms),
+            "start_date": start_date.isoformat() if start_date else None,
+            "end_date": end_date.isoformat() if end_date else None,
+            "limit_per_concept": limit_per_concept,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    path = dataset_path(
+        "sec",
+        cik,
+        "company-facts",
+        f"{sha256(request_key.encode()).hexdigest()[:16]}.jsonl",
+    )
+    dataset = await materialize_text(
+        path,
+        _facts_jsonl(
+            records,
+            cik=cik,
+            source=source,
+            retrieved_at=retrieved_at,
+        ),
+        format="jsonl",
+    )
+    dataset["row_count"] = len(records)
+    matched_concepts = sorted({str(record["concept"]) for record in records})
+    requested_display = [value.rsplit(":", maxsplit=1)[-1] for value in concepts]
+    missing_concepts = [
+        value
+        for value in requested_display
+        if value.casefold() not in {item.casefold() for item in matched_concepts}
+    ]
+    comparison_dates = sorted(
+        str(record.get("end") or record.get("filed"))
+        for record in records
+        if record.get("end") or record.get("filed")
+    )
+    columns = sorted(
+        {"cik", "source", "retrieved_at"}.union(
+            *(record.keys() for record in records),
+        )
+    )
+    return json.dumps(
+        {
+            "status": "success",
+            "summary": (
+                f"Materialized {len(records)} SEC XBRL fact rows across "
+                f"{len(matched_concepts)} matched concepts."
+            ),
+            "cik": cik,
+            "requested_concepts": requested_display,
+            "matched_concepts": matched_concepts,
+            "missing_concepts": missing_concepts,
+            "date_range": (
+                {"start": comparison_dates[0], "end": comparison_dates[-1]}
+                if comparison_dates
+                else None
+            ),
+            "columns": columns,
+            "preview": records[:3],
+            "dataset": dataset,
+            "next_step": (
+                "Use Python to read the JSONL one object per line, then filter, align "
+                "periods, aggregate, or calculate from the dataset. Avoid returning "
+                "the full dataset to model context."
+            ),
+            "provider": "U.S. Securities and Exchange Commission",
+            "source": source,
+            "retrieved_at": retrieved_at,
+        },
+        ensure_ascii=False,
+    )
 
 
 SEC_TOOLS = [

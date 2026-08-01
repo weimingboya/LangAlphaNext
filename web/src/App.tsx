@@ -1,6 +1,7 @@
 import { AuthGate } from "./features/auth/AuthGate";
 import { useAuth } from "./features/auth/useAuth";
 import { ResearchWorkspace } from "./features/research/ResearchWorkspace";
+import { BrandMark } from "./shared/ui/BrandMark";
 
 export function App() {
   const auth = useAuth();
@@ -9,9 +10,7 @@ export function App() {
     return (
       <section className="auth-gate">
         <div className="auth-card">
-          <div className="empty-mark loading-mark" aria-hidden="true">
-            L
-          </div>
+          <BrandMark className="empty-brand-mark loading-mark" />
           <h1>LangAlpha</h1>
           <p>Loading secure workspace…</p>
         </div>
